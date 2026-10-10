@@ -74,13 +74,14 @@ export default function LandingPage({ onTryNow }: LandingPageProps) {
               <ArrowRight className="h-4 w-4" />
             </button>
             <a
-              href="/Bao_cao_KHKT_V11.docx"
+              href="/Baocao.docx"
+              download
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold rounded-md border border-slate-300 transition-colors"
             >
               <FileText className="h-4 w-4" />
-              Đọc báo cáo (V11)
+              Đọc báo cáo
             </a>
           </div>
 

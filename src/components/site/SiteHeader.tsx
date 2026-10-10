@@ -77,13 +77,14 @@ export default function SiteHeader() {
           {/* CTA + Mobile toggle */}
           <div className="flex items-center gap-2">
             <a
-              href="/Bao_cao_KHKT_Du_bao_chay_rung_V9.pdf"
+              href="/Baocao.docx"
+              download
               target="_blank"
               rel="noopener noreferrer"
               className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-stone-900 hover:bg-stone-800 text-white rounded-md transition-colors"
             >
               <FileText className="h-3.5 w-3.5" />
-              Báo cáo PDF
+              Báo cáo (Word)
             </a>
             <button
               onClick={() => setMobileOpen((v) => !v)}
@@ -113,13 +114,14 @@ export default function SiteHeader() {
                 </button>
               ))}
               <a
-                href="/Bao_cao_KHKT_Du_bao_chay_rung_V9.pdf"
+                href="/Baocao.docx"
+                download
                 target="_blank"
                 rel="noopener noreferrer"
                 className="px-3 py-2 text-left text-sm font-semibold text-white bg-stone-900 rounded-md inline-flex items-center gap-1.5"
               >
                 <FileText className="h-3.5 w-3.5" />
-                Báo cáo PDF
+                Báo cáo (Word)
               </a>
             </nav>
           </motion.div>

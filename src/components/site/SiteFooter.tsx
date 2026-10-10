@@ -34,13 +34,14 @@ export default function SiteFooter() {
             <ul className="space-y-2 text-sm">
               <li>
                 <a
-                  href="/Bao_cao_KHKT_Du_bao_chay_rung_V9.pdf"
+                  href="/Baocao.docx"
+                  download
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 text-stone-400 hover:text-slate-400 transition-colors"
                 >
                   <FileText className="h-4 w-4" />
-                  Báo cáo PDF (compact)
+                  Báo cáo (Word)
                 </a>
               </li>
               <li>
