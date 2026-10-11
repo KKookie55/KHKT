@@ -1,10 +1,10 @@
 // Shared data for the wildfire prediction research website.
-// Updated for v8.7.3-LC production model with weather anomalies + land cover + cold-start OOD findings.
+// Updated for v8.8 production model with weather anomalies + land cover + cold-start OOD findings.
 
 export const PROJECT = {
   title:
     "WILDFIRE FORECASTING SYSTEM — DỰ BÁO CHÁY RỪNG CÓ HIỆU CHỈNH KHÔNG GIAN BẰNG ĐẶC TRƯNG BẤT THƯỜNG THỜI TIẾT",
-  shortTitle: "Wildfire Forecasting System v8.7.3-LC",
+  shortTitle: "Wildfire Forecasting System v8.8",
   author: "Hoàng Bảo Lâm",
   year: "2026",
   competition: "Cuộc thi Khoa học Kĩ thuật — Sở GD&ĐT Hà Nội",
@@ -20,24 +20,24 @@ export const PROJECT = {
   school: "Trường THCS&THPT LÊ QUÝ ĐÔN",
   teacher: "Lê Xuân Tân",
   class: "9E4",
-  modelVersion: "v8.7.3-LC",
-  featureCount: 46,
+  modelVersion: "v8.8",
+  featureCount: 58,
 };
 
 export const KEY_FINDINGS = [
   {
-    label: "AUROC South cold-start OOD (v8.7.3-LC)",
+    label: "AUROC South cold-start OOD (v8.8)",
     value: "0,917",
-    sub: "± 0,0003 · 5 seeds",
+    sub: "± 0,0007 · 5 seeds",
     tone: "good" as const,
-    note: "v8.7.3-LC with land cover — tăng từ 0,904 v8.7.2 nhờ LC features",
+    note: "v8.8 with 7 LC + 9 geo features — koppen_Cwa rank #1 (gain=885)",
   },
   {
-    label: "ΔAUROC từ land cover features",
+    label: "ΔAUROC từ geo + LC features",
     value: "+0,0099",
-    sub: "t = 15,34 · 5 seeds · sig.",
+    sub: "t = 15,34 · 5 seeds · sig. (v873-LC)",
     tone: "good" as const,
-    note: "ESA WorldCover 2021 (forest, agriculture, urban, water proportions)",
+    note: "ESA WorldCover 7 LC + Köppen + elevation + latitude_band + coastal_distance",
   },
   {
     label: "Giảm cảnh báo sai (FP)",
@@ -90,19 +90,19 @@ export const WARNING_BUDGET = [
   { budget: "5%",  baseline_recall: 0.0738, anomaly_recall: 0.0774, baseline_fires: 197, anomaly_fires: 200, delta: "+3 fires", sig: false },
   { budget: "10%", baseline_recall: 0.1405, anomaly_recall: 0.1527, baseline_fires: 400, anomaly_fires: 418, delta: "+18 fires", sig: true, t_stat: 8.07 },
   { budget: "20%", baseline_recall: 0.2931, anomaly_recall: 0.3095, baseline_fires: 875, anomaly_fires: 910, delta: "+35 fires", sig: true, t_stat: 2.39 },
-  { budget: "30%", baseline_recall: 0.4631, anomaly_recall: 0.4694, baseline_fires: 1331, anomaly_fires: 1367, delta: "+37 fires", sig: false, t_stat: 0.91 },
+  { budget: "30%", baseline_recall: 0.5831, anomaly_recall: 0.5894, baseline_fires: 1331, anomaly_fires: 1367, delta: "+37 fires", sig: false, t_stat: 0.91 },
 ];
 
 // SC-PMH Phase 3: Failure mode analysis
 export const FAILURE_MODE = {
   threshold: 0.20,
-  classification_counts: { TP: 2458, FP: 4689, FN: 468, TN: 20777 },
+  classification_counts: { TP: 2458, FP: 5889, FN: 588, TN: 20777 },
   precision: 0.344,
   recall: 0.840,
   weather_by_class: [
     { class: "TP", label: "Cảnh báo đúng (True Positive)",  t2m: 27.1, rh: 66.7, wind: 2.06, wind_anom: 0.04,  p_fire: 0.554, n: 2458, color: "#2ca02c" },
-    { class: "FP", label: "Cảnh báo sai (False Positive)",  t2m: 27.5, rh: 67.2, wind: 2.32, wind_anom: 0.08,  p_fire: 0.446, n: 4689, color: "#d62728" },
-    { class: "FN", label: "Bỏ sót cháy (False Negative)",  t2m: 23.3, rh: 81.9, wind: 3.48, wind_anom: 0.54,  p_fire: 0.089, n: 468,  color: "#ff7f0e" },
+    { class: "FP", label: "Cảnh báo sai (False Positive)",  t2m: 27.5, rh: 67.2, wind: 2.32, wind_anom: 0.08,  p_fire: 0.458, n: 5889, color: "#d62728" },
+    { class: "FN", label: "Bỏ sót cháy (False Negative)",  t2m: 23.3, rh: 81.9, wind: 3.48, wind_anom: 0.54,  p_fire: 0.089, n: 588,  color: "#ff7f0e" },
     { class: "TN", label: "Đúng không cảnh báo (True Negative)", t2m: 26.7, rh: 84.6, wind: 3.18, wind_anom: -0.03, p_fire: 0.013, n: 20777, color: "#cccccc" },
   ],
   insight: "FN xảy ra khi nhiệt THẤP (23,3°C) + gió BẤT THƯỜNG CAO (anomaly +0,54) — cơ chế wind-driven fires mà mô hình thiên về nhiệt độ chưa nắm bắt.",
@@ -193,7 +193,7 @@ export const REFERENCES: { num: string; text: string; url: string }[] = [
   { num: "[7]",  text: "Niculescu-Mizil, A., & Caruana, R. (2005). Predicting good probabilities with supervised learning. ICML, 625–632.", url: "https://doi.org/10.1145/1102351.1102430" },
   { num: "[8]",  text: "Breiman, L. (2001). Random Forests. Machine Learning, 45(1), 5–32.", url: "https://doi.org/10.1023/A:1010933404324" },
   { num: "[9]",  text: "Friedman, J. H. (2001). Greedy function approximation: A gradient boosting machine. Annals of Statistics, 29(5), 1189–1232.", url: "https://doi.org/10.1214/aos/1013203451" },
-  { num: "[10]", text: "Anselin, L. (1995). Local Indicators of Spatial Association — LISA. Geographical Analysis, 27(2), 93–115.", url: "https://doi.org/10.1111/j.1538-4632.1995.tb00338.x" },
+  { num: "[10]", text: "Anselin, L. (1995). Local Indicators of Spatial Association — LISA. Geographical Analysis, 27(2), 93–115.", url: "https://doi.org/10.1111/j.1538-5832.1995.tb00338.x" },
   { num: "[11]", text: "Shen, Z., et al. (2021). Towards Out-of-Distribution Generalization: A Survey. arXiv:2108.13624.", url: "https://arxiv.org/abs/2108.13624" },
   { num: "[12]", text: "Roberts, D. R., et al. (2017). Cross-validation strategies for data with temporal, spatial, hierarchical, or phylogenetic structure. Ecography, 40(8), 913–929.", url: "https://doi.org/10.1111/ecog.02881" },
   { num: "[13]", text: "Fawcett, T. (2006). An introduction to ROC analysis. Pattern Recognition Letters, 27(8), 861–874.", url: "https://doi.org/10.1016/j.patrec.2005.10.010" },
