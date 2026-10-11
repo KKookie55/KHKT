@@ -9,8 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import {
-  History, MapPin, Flame, AlertTriangle, Thermometer, Wind, CloudRain, Activity,
-  Cpu, Clock, Layers, CheckCircle2, XCircle, Eye, EyeOff, Gauge, ArrowRight,
+  History, MapPin, Flame, AlertTriangle, Activity,
+  Cpu, Layers, Gauge, TreePine, Flame as FlameIcon,
 } from "lucide-react";
 
 const MapContainer = dynamic(() => import("react-leaflet").then(m => m.MapContainer), { ssr: false });
@@ -18,28 +18,43 @@ const TileLayer    = dynamic(() => import("react-leaflet").then(m => m.TileLayer
 const CircleMarker = dynamic(() => import("react-leaflet").then(m => m.CircleMarker), { ssr: false });
 const Popup        = dynamic(() => import("react-leaflet").then(m => m.Popup),         { ssr: false });
 
-// Heatmap data types (matches the JSON structure produced by build_heatmap_data.py)
+// Heatmap data types (matches the JSON structure produced by build_heatmap_data.py + v9.0 multi-task)
 interface CellPrediction {
-  lat: number; lon: number; p: number; fire: number;
+  lat: number; lon: number;
+  p: number;          // PRIMARY: forest fire probability (high-confidence)
+  p_any: number;      // SECONDARY: any fire probability
+  fire: number;       // forest fire observed (high-conf)
+  fire_any: number;   // any fire observed (MODIS detection)
 }
 interface DateData {
-  date: string; n_cells: number; n_fires: number; p_max: number; p_mean: number;
+  date: string; n_cells: number;
+  n_fires: number;        // forest fire count
+  n_fires_any: number;    // any fire count
+  p_max: number; p_mean: number;       // forest fire stats
+  p_any_max: number; p_any_mean: number; // any fire stats
   cells: CellPrediction[];
 }
 interface HeatmapData {
   metadata: {
     model: string;
+    topic?: string;
     features: number;
     feature_set: string;
     train: string; val: string; test: string;
-    metrics_south_cold_OOD: { AUROC: number; PR_AUC: number; Brier: number };
-    key_innovation: string;
-    most_important_feature: string;
-    failure_mode: string;
+    label_definition?: string;
+    metrics_south_cold_OOD_forest_fire?: { AUROC: number; PR_AUC: number; Brier: number; pos_rate_south: number };
+    metrics_south_cold_OOD_any_fire?: { AUROC: number; PR_AUC: number; Brier: number; pos_rate_south: number };
+    metrics_south_cold_OOD?: { AUROC: number; PR_AUC: number; Brier: number };
+    key_innovation?: string;
+    key_finding?: string;
+    most_important_feature?: string;
+    failure_mode?: string;
     thresholds_for_risk_levels: { low: number; moderate: number; high: number; severe: number };
   };
   dates: DateData[];
 }
+
+type PredictionMode = "forest" | "any";
 
 const BASEMAPS = [
   { id: "osm", name: "OpenStreetMap", url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: '&copy; OpenStreetMap', maxZoom: 19 },
@@ -75,6 +90,7 @@ export default function HistoricalReplay() {
   const [showFirePoints, setShowFirePoints] = useState(true);
   const [showColdStartOverlay, setShowColdStartOverlay] = useState(true);
   const [basemap, setBasemap] = useState<typeof BASEMAPS[number]["id"]>("osm");
+  const [predMode, setPredMode] = useState<PredictionMode>("forest");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -83,7 +99,6 @@ export default function HistoricalReplay() {
       .then((d: HeatmapData) => {
         setData(d);
         if (d.dates.length > 0) {
-          // Pick top fire day by default
           const topFire = [...d.dates].sort((a, b) => b.n_fires - a.n_fires)[0];
           setSelectedDate(topFire.date);
         }
@@ -97,10 +112,12 @@ export default function HistoricalReplay() {
   const stats = useMemo(() => {
     if (!currentDate) return null;
     const cells = currentDate.cells;
-    const n_high = cells.filter(c => c.p >= 0.20).length;
-    const n_severe = cells.filter(c => c.p >= 0.30).length;
-    const fires_in_high = cells.filter(c => c.p >= 0.20 && c.fire === 1).length;
-    const fires_total = currentDate.n_fires;
+    const pField = predMode === "forest" ? "p" : "p_any";
+    const fireField = predMode === "forest" ? "fire" : "fire_any";
+    const n_high = cells.filter(c => c[pField] >= 0.20).length;
+    const n_severe = cells.filter(c => c[pField] >= 0.30).length;
+    const fires_in_high = cells.filter(c => c[pField] >= 0.20 && c[fireField] === 1).length;
+    const fires_total = predMode === "forest" ? currentDate.n_fires : currentDate.n_fires_any;
     const recall = fires_total > 0 ? fires_in_high / fires_total : 0;
     const precision = n_high > 0 ? fires_in_high / n_high : 0;
     return {
@@ -108,9 +125,10 @@ export default function HistoricalReplay() {
       n_fires: fires_total,
       n_high, n_severe,
       recall, precision,
-      p_max: currentDate.p_max, p_mean: currentDate.p_mean,
+      p_max: predMode === "forest" ? currentDate.p_max : currentDate.p_any_max,
+      p_mean: predMode === "forest" ? currentDate.p_mean : currentDate.p_any_mean,
     };
-  }, [currentDate]);
+  }, [currentDate, predMode]);
 
   if (loading) {
     return (
@@ -132,6 +150,12 @@ export default function HistoricalReplay() {
     );
   }
 
+  const pField = predMode === "forest" ? "p" : "p_any";
+  const fireField = predMode === "forest" ? "fire" : "fire_any";
+  const metrics = predMode === "forest"
+    ? data.metadata.metrics_south_cold_OOD_forest_fire
+    : data.metadata.metrics_south_cold_OOD_any_fire;
+
   return (
     <section id="historical-replay" className="py-16 bg-stone-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -148,16 +172,38 @@ export default function HistoricalReplay() {
             Bản đồ dự báo × điểm cháy quan sát
           </h2>
           <p className="mt-3 text-stone-600 max-w-3xl mx-auto">
-            Chọn một ngày từ 2023 (test set, miền Nam Việt Nam) để xem dự báo của mô hình v8.7.2 (42 features, cold-start)
-            so với điểm cháy MODIS quan sát được. Mỗi ô lưới 0,5° được tô màu theo xác suất dự báo.
+            Chọn một ngày từ 2023 (test set, miền Nam Việt Nam) để xem dự báo của mô hình v9.0 multi-task
+            (61 features, cold-start) so với điểm cháy MODIS quan sát được. Mỗi ô lưới 0,5° được tô màu theo xác suất dự báo.
             <span className="font-semibold text-amber-700"> Overlay Cold-start</span> cho biết vùng nào
-            đã có trong huấn luyện (Bắc, in-distribution) vs. vùng chưa từng thấy (Nam, spatial OOD).
+            đã có trong huấn luyện (Bắc) vs. chưa từng thấy (Nam, spatial OOD).
           </p>
         </motion.div>
 
         {/* Controls */}
-        <div className="mt-8 grid grid-cols-1 md:grid-cols-4 gap-4">
-          <div>
+        <div className="mt-8 grid grid-cols-1 md:grid-cols-5 gap-4">
+          <div className="md:col-span-1">
+            <Label className="text-stone-700 text-sm font-medium">Chế độ dự báo</Label>
+            <Select value={predMode} onValueChange={(v: any) => setPredMode(v)}>
+              <SelectTrigger className="w-full mt-1">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="forest">
+                  <span className="flex items-center gap-2">
+                    <TreePine className="h-3 w-3 text-green-700" />
+                    Cháy RỪNG (high-confidence)
+                  </span>
+                </SelectItem>
+                <SelectItem value="any">
+                  <span className="flex items-center gap-2">
+                    <FlameIcon className="h-3 w-3 text-orange-600" />
+                    Cháy BẤT KỲ (all MODIS)
+                  </span>
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="md:col-span-2">
             <Label className="text-stone-700 text-sm font-medium">Ngày dự báo</Label>
             <Select value={selectedDate} onValueChange={setSelectedDate}>
               <SelectTrigger className="w-full mt-1">
@@ -166,7 +212,7 @@ export default function HistoricalReplay() {
               <SelectContent className="max-h-72">
                 {[...data.dates].sort((a, b) => b.n_fires - a.n_fires).map(d => (
                   <SelectItem key={d.date} value={d.date}>
-                    {d.date} · {d.n_fires} cháy · p_max={d.p_max.toFixed(2)}
+                    {d.date} · {d.n_fires} cháy rừng · p_max={d.p_max.toFixed(2)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -181,19 +227,59 @@ export default function HistoricalReplay() {
               </SelectContent>
             </Select>
           </div>
-          <div className="flex items-center gap-3 mt-6">
-            <Switch checked={showFirePoints} onCheckedChange={setShowFirePoints} id="fires" />
-            <Label htmlFor="fires" className="text-stone-700 text-sm flex items-center gap-1">
-              <Flame className="h-4 w-4 text-red-600" /> Điểm cháy quan sát
-            </Label>
-          </div>
-          <div className="flex items-center gap-3 mt-6">
-            <Switch checked={showColdStartOverlay} onCheckedChange={setShowColdStartOverlay} id="cold" />
-            <Label htmlFor="cold" className="text-stone-700 text-sm flex items-center gap-1">
-              <Layers className="h-4 w-4 text-blue-600" /> Overlay Cold-start
-            </Label>
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-3 mt-6">
+              <Switch checked={showFirePoints} onCheckedChange={setShowFirePoints} id="fires" />
+              <Label htmlFor="fires" className="text-stone-700 text-sm flex items-center gap-1">
+                <Flame className="h-4 w-4 text-red-600" /> Điểm cháy quan sát
+              </Label>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch checked={showColdStartOverlay} onCheckedChange={setShowColdStartOverlay} id="cold" />
+              <Label htmlFor="cold" className="text-stone-700 text-sm flex items-center gap-1">
+                <Layers className="h-4 w-4 text-blue-600" /> Overlay Cold-start
+              </Label>
+            </div>
           </div>
         </div>
+
+        {/* Mode info banner */}
+        <motion.div
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}
+          className={`mt-4 p-3 rounded-lg border text-sm ${
+            predMode === "forest"
+              ? "bg-green-50 border-green-300 text-green-900"
+              : "bg-orange-50 border-orange-300 text-orange-900"
+          }`}
+        >
+          {predMode === "forest" ? (
+            <div className="flex items-start gap-2">
+              <TreePine className="h-5 w-5 text-green-700 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-semibold mb-1">Chế độ dự báo CHÁY RỪNG (production model)</div>
+                <div>
+                  Lọc chỉ giữ cháy high-confidence (FRP cao = cháy rừng thật), loại bỏ cháy nông nghiệp.
+                  South predictions giảm 64% so với "cháy bất kỳ" — khớp với bản đồ chuyên gia.
+                  Metrics South 2023 cold-start OOD:
+                  AUROC = {metrics?.AUROC.toFixed(4)} · PR-AUC = {metrics?.PR_AUC.toFixed(4)} · Brier = {metrics?.Brier.toFixed(4)}.
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2">
+              <FlameIcon className="h-5 w-5 text-orange-600 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-semibold mb-1">Chế độ dự báo CHÁY BẤT KỲ (so sánh)</div>
+                <div>
+                  Bao gồm mọi MODIS detection — kể cả cháy nông nghiệp (rơm rạ, mía).
+                  South predictions CAO hơn vì Nam có nhiều cháy nông nghiệp.
+                  Metrics South 2023 cold-start OOD:
+                  AUROC = {metrics?.AUROC.toFixed(4)} · PR-AUC = {metrics?.PR_AUC.toFixed(4)} · Brier = {metrics?.Brier.toFixed(4)}.
+                </div>
+              </div>
+            </div>
+          )}
+        </motion.div>
 
         {/* Map + side panel */}
         <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -203,10 +289,10 @@ export default function HistoricalReplay() {
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-stone-900">
                   <MapPin className="h-5 w-5" />
-                  Bản đồ dự báo — {currentDate.date}
+                  Bản đồ dự báo {predMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} — {currentDate.date}
                 </CardTitle>
                 <CardDescription>
-                  {stats?.n_cells} ô lưới 0,5° · {stats?.n_fires} điểm cháy MODIS · p_max={stats?.p_max.toFixed(3)} · p_mean={stats?.p_mean.toFixed(3)}
+                  {stats?.n_cells} ô lưới 0,5° · {stats?.n_fires} điểm cháy · p_max={stats?.p_max.toFixed(3)} · p_mean={stats?.p_mean.toFixed(3)}
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0">
@@ -220,17 +306,17 @@ export default function HistoricalReplay() {
                       url={BASEMAPS.find(b => b.id === basemap)!.url}
                       attribution={BASEMAPS.find(b => b.id === basemap)!.attribution}
                     />
-                    {/* Predicted probability cells */}
+                    {/* Predicted probability cells (using selected mode's p) */}
                     {currentDate.cells.map((c, i) => {
-                      const fill = riskColor(c.p);
+                      const p = predMode === "forest" ? c.p : c.p_any;
+                      const fill = riskColor(p);
                       const isOOD = c.lat < 14;
-                      // If cold-start overlay is on, dim in-distribution cells slightly to emphasize OOD
                       const opacity = showColdStartOverlay
-                        ? (isOOD ? 0.85 : 0.35)  // dim North cells, highlight South cells
+                        ? (isOOD ? 0.85 : 0.35)
                         : 0.75;
                       return (
                         <CircleMarker
-                          key={`cell-${i}`}
+                          key={`cell-${i}-${predMode}`}
                           center={[c.lat, c.lon]}
                           radius={11}
                           pathOptions={{ color: "#1f2937", weight: 0.5, fillColor: fill, fillOpacity: opacity }}
@@ -241,27 +327,46 @@ export default function HistoricalReplay() {
                               <div>Trạng thái: <span className={isOOD ? "text-red-600 font-semibold" : "text-blue-600"}>
                                 {isOOD ? "Cold-start (spatial OOD)" : "In-distribution"}
                               </span></div>
-                              <div>Xác suất cháy: <span className="font-semibold" style={{ color: fill }}>{(c.p * 100).toFixed(1)}% — {riskLevel(c.p)}</span></div>
-                              <div>Cháy quan sát (MODIS): {c.fire === 1 ? <span className="text-red-600 font-bold">CÓ</span> : <span className="text-stone-500">không</span>}</div>
-                              <div className="text-xs text-stone-500 mt-1">Mô hình: XGBoost v8.7.2 (42 feats, cold-start)</div>
+                              <div className="mt-2 space-y-1 border-t pt-2">
+                                <div>
+                                  <span className="text-green-700 font-semibold">🌲 Cháy RỪNG:</span>{" "}
+                                  <span className="font-semibold" style={{ color: riskColor(c.p) }}>
+                                    {(c.p * 100).toFixed(1)}% — {riskLevel(c.p)}
+                                  </span>
+                                  {c.fire === 1 && <span className="text-red-600 font-bold ml-2">🔥 CÓ</span>}
+                                </div>
+                                <div>
+                                  <span className="text-orange-700 font-semibold">🔥 Cháy BẤT KỲ:</span>{" "}
+                                  <span className="font-semibold" style={{ color: riskColor(c.p_any) }}>
+                                    {(c.p_any * 100).toFixed(1)}% — {riskLevel(c.p_any)}
+                                  </span>
+                                  {c.fire_any === 1 && <span className="text-red-600 font-bold ml-2">🔥 CÓ</span>}
+                                </div>
+                              </div>
+                              <div className="text-xs text-stone-500 mt-2 border-t pt-1">
+                                Mô hình: XGBoost v9.0 multi-task (61 feats, cold-start)
+                              </div>
                             </div>
                           </Popup>
                         </CircleMarker>
                       );
                     })}
-                    {/* Fire points overlay */}
-                    {showFirePoints && currentDate.cells.filter(c => c.fire === 1).map((c, i) => (
+                    {/* Fire points overlay — uses selected mode's fire label */}
+                    {showFirePoints && currentDate.cells.filter(c => c[fireField] === 1).map((c, i) => (
                       <CircleMarker
-                        key={`fire-${i}`}
+                        key={`fire-${i}-${predMode}`}
                         center={[c.lat, c.lon]}
                         radius={6}
                         pathOptions={{ color: "#000000", weight: 2, fillColor: "#ef4444", fillOpacity: 1 }}
                       >
                         <Popup>
                           <div className="text-xs">
-                            <div className="font-bold">🔥 MODIS Active Fire</div>
+                            <div className="font-bold">
+                              {predMode === "forest" ? "🌲 Forest fire (high-conf)" : "🔥 MODIS Active Fire"}
+                            </div>
                             <div>{c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E</div>
-                            <div>Xác suất dự báo: {(c.p * 100).toFixed(1)}%</div>
+                            <div>P (cháy rừng): {(c.p * 100).toFixed(1)}%</div>
+                            <div>P (cháy bất kỳ): {(c.p_any * 100).toFixed(1)}%</div>
                           </div>
                         </Popup>
                       </CircleMarker>
@@ -278,7 +383,8 @@ export default function HistoricalReplay() {
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-stone-900 flex items-center gap-2 text-base">
-                  <Activity className="h-4 w-4" /> Phân loại dự báo (p ≥ 0,20)
+                  <Activity className="h-4 w-4" />
+                  Phân loại {predMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} (p ≥ 0,20)
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
@@ -291,7 +397,9 @@ export default function HistoricalReplay() {
                       </div>
                       <div className="bg-red-50 border border-red-200 rounded p-2">
                         <div className="text-red-700 font-bold text-lg">{stats.n_fires}</div>
-                        <div className="text-stone-600 text-xs">Tổng fires thực tế</div>
+                        <div className="text-stone-600 text-xs">
+                          {predMode === "forest" ? "Cháy rừng thực tế" : "Tổng fires thực tế"}
+                        </div>
                       </div>
                     </div>
                     <div className="border-t pt-2 space-y-1">
@@ -345,7 +453,7 @@ export default function HistoricalReplay() {
                     <div>
                       <div className="font-semibold">Vùng spatial OOD (lat &lt; 14°)</div>
                       <div className="text-blue-700">Miền Nam — mô hình chưa từng thấy các ô này trong huấn luyện.
-                      Dự báo ở đây có độ tin cậy THẤP HƠN. AUROC thực = 0,904 (vs 0,982 in-distribution).</div>
+                      Dự báo ở đây có độ tin cậy THẤP HƠN. AUROC = {metrics?.AUROC.toFixed(3)} (vs 0.982 in-distribution).</div>
                     </div>
                   </div>
                   <div className="flex items-start gap-2">
@@ -355,13 +463,54 @@ export default function HistoricalReplay() {
                       <div className="text-blue-700">Miền Bắc — đã có trong huấn luyện. Dự báo đáng tin hơn.</div>
                     </div>
                   </div>
-                  <div className="border-t border-blue-200 pt-2 mt-2">
-                    <div className="font-semibold mb-1">Cơ chế thất bại đã biết:</div>
-                    <div className="text-blue-800">{data.metadata.failure_mode}</div>
-                  </div>
                 </CardContent>
               </Card>
             )}
+
+            {/* Mode comparison */}
+            <Card className="border-stone-300 bg-stone-50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-stone-900 flex items-center gap-2 text-base">
+                  <Cpu className="h-4 w-4" /> So sánh 2 chế độ
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-xs">
+                <table className="w-full text-stone-700">
+                  <thead>
+                    <tr className="border-b border-stone-300">
+                      <th className="text-left py-1">Metric</th>
+                      <th className="text-right py-1">🌲 Rừng</th>
+                      <th className="text-right py-1">🔥 Bất kỳ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td className="py-1">AUROC</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_forest_fire?.AUROC.toFixed(3) ?? '—'}</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_any_fire?.AUROC.toFixed(3) ?? '—'}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1">PR-AUC</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_forest_fire?.PR_AUC.toFixed(3) ?? '—'}</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_any_fire?.PR_AUC.toFixed(3) ?? '—'}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1">Brier</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_forest_fire?.Brier.toFixed(3) ?? '—'}</td>
+                      <td className="text-right font-mono">{data.metadata.metrics_south_cold_OOD_any_fire?.Brier.toFixed(3) ?? '—'}</td>
+                    </tr>
+                    <tr>
+                      <td className="py-1">Pos rate (Nam)</td>
+                      <td className="text-right font-mono">{((data.metadata.metrics_south_cold_OOD_forest_fire as any)?.pos_rate_south * 100).toFixed(1) ?? '—'}%</td>
+                      <td className="text-right font-mono">{((data.metadata.metrics_south_cold_OOD_any_fire as any)?.pos_rate_south * 100).toFixed(1) ?? '—'}%</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div className="text-stone-500 italic mt-2">
+                  Lọc cháy nông nghiệp → South pos rate giảm 67%, "Nguy hiểm" cells giảm 64%.
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </div>
 
@@ -370,20 +519,23 @@ export default function HistoricalReplay() {
           <div className="flex items-start gap-2">
             <Cpu className="h-5 w-5 text-stone-500 mt-0.5 shrink-0" />
             <div>
-              <div className="font-semibold text-stone-900 mb-1">Phương pháp luận:</div>
+              <div className="font-semibold text-stone-900 mb-1">Phương pháp luận v9.0:</div>
               <p>
-                Mô hình <span className="font-mono">XGBoost v8.7.2</span> được huấn luyện trên
+                Mô hình <span className="font-mono">XGBoost v9.0 multi-task</span> được huấn luyện trên
                 <strong> miền Bắc Việt Nam (lat ≥ 14°) 2018-2021</strong>, hiệu chỉnh bằng isotonic regression
                 trên validation Bắc 2022. Đánh giá trên <strong>miền Nam 2023 (spatial OOD)</strong>.
-                Features: 35 cold-baseline (weather + lags + rolling stats) + 7 weather anomalies
-                (departure from per-cell day-of-year climatology từ 2018-2021). Không dùng fire-history
-                features → áp dụng được cho bất kỳ ô nào kể cả ô chưa từng thấy.
+                61 features: 35 cold baseline (weather + lags + rolling + derived) + 7 weather anomalies
+                (departure từ per-cell doy climatology) + 7 land cover (ESA WorldCover 2021:
+                forest, shrubland, grassland, agriculture, urban, bare, water) + 9 geo (elevation, slope,
+                3 Köppen one-hot, latitude_band, coastal_distance, population_proxy) + 3 NDVI
+                (MODIS MOD13A1: mean, std, amplitude per cell).
               </p>
               <p className="mt-2">
-                Metrics: AUROC = 0,904 · PR-AUC = 0,443 · Brier = 0,074 · Recall@0,20 = 84,0% · Precision@0,20 = 34,4%.
-                Đóng góp chính: <span className="font-semibold">+0,0056 AUROC</span> từ 7 weather anomalies
-                (t = 17,08, 5 seeds), tương đương <span className="font-semibold">+18 fires/year</span> tại
-                cùng ngân sách cảnh báo 10% cells/ngày.
+                <strong>Multi-task</strong>: 2 XGBoost models chia sẻ 61 features.
+                <span className="text-green-700 font-semibold"> Task 1 (fire_forest)</span> = MODIS detection
+                có confidence='high' (proxy cho high-FRP wildfire, lọc cháy nông nghiệp).
+                <span className="text-orange-700 font-semibold"> Task 2 (fire_any)</span> = any MODIS detection
+                (bao gồm cháy nông nghiệp).
               </p>
             </div>
           </div>
