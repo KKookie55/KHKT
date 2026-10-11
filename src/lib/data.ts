@@ -3,7 +3,7 @@
 
 export const PROJECT = {
   title:
-    "WILDFIRE FORECASTING SYSTEM — DỰ BÁO CHÁY RỪNG CÓ HIỆU CHỈNH KHÔNG GIAN BẰNG ĐẶC TRƯNG BẤT THƯỜNG THỜI TIẾT",
+    "HỆ THỐNG DỰ BÁO CHÁY RỪNG CÓ Ý THỨC ĐỘ TIN CẬY DƯỚI DỊCH CHUYỂN PHÂN PHỐI KHÔNG GIAN BẰNG MÔ HÌNH HỌC MÁY",
   shortTitle: "Wildfire Forecasting System v8.8",
   author: "Hoàng Bảo Lâm",
   year: "2026",
@@ -20,38 +20,38 @@ export const PROJECT = {
   school: "Trường THCS&THPT LÊ QUÝ ĐÔN",
   teacher: "Lê Xuân Tân",
   class: "9E4",
-  modelVersion: "v8.8",
+  modelVersion: "v9.0 forest fire",
   featureCount: 58,
 };
 
 export const KEY_FINDINGS = [
   {
-    label: "AUROC South cold-start OOD (v8.8)",
-    value: "0,917",
+    label: "AUROC cold-start OOD — cháy RỪNG (v9.0)",
+    value: "92,1%",
     sub: "± 0,0007 · 5 seeds",
     tone: "good" as const,
-    note: "v8.8 with 7 LC + 9 geo features — koppen_Cwa rank #1 (gain=885)",
+    note: "Lọc cháy nông nghiệp (low/nominal confidence), chỉ giữ high-confidence = cháy rừng cường cao",
   },
   {
-    label: "ΔAUROC từ geo + LC features",
-    value: "+0,0099",
-    sub: "t = 15,34 · 5 seeds · sig. (v873-LC)",
+    label: "Giảm over-prediction Nam",
+    value: "−64%",
+    sub: "Nguy hiểm cells: 4922 → 1782",
     tone: "good" as const,
-    note: "ESA WorldCover 7 LC + Köppen + elevation + latitude_band + coastal_distance",
+    note: "Khi lọc chỉ giữ cháy rừng, miền Nam predictions giảm 64% — khớp với bản đồ chuyên gia",
   },
   {
-    label: "Giảm cảnh báo sai (FP)",
-    value: "−515 cells",
-    sub: "t = −5,69 · 5 seeds · sig.",
+    label: "Cải thiện từ v8.6 ban đầu",
+    value: "+33,7 điểm %",
+    sub: "58,4% → 92,1% AUROC",
     tone: "good" as const,
-    note: "Ít cảnh báo sai hơn — precision +2,1pp. Giải quyết over-prediction Nam.",
+    note: "Nhờ weather anomalies + land cover + NDVI + multi-task filtering",
   },
   {
-    label: "Failure mode phát hiện",
-    value: "Wind-driven",
-    sub: "FN: t2m=23,3°C · wind_anom=+0,54",
+    label: "Phương pháp multi-task",
+    value: "2 models",
+    sub: "fire_any + fire_high (forest)",
     tone: "warning" as const,
-    note: "Mô hình bỏ sót cháy do gió khi nhiệt thấp — hướng cải tiến tiếp theo",
+    note: "Phân biệt cháy nông nghiệp vs cháy rừng qua confidence — proxy cho FRP (fire radiative power)",
   },
 ];
 
