@@ -1,10 +1,10 @@
 // Shared data for the wildfire prediction research website.
-// Updated for v8.7.2 production model with weather anomalies + cold-start OOD findings.
+// Updated for v8.7.3-LC production model with weather anomalies + land cover + cold-start OOD findings.
 
 export const PROJECT = {
   title:
     "WILDFIRE FORECASTING SYSTEM — DỰ BÁO CHÁY RỪNG CÓ HIỆU CHỈNH KHÔNG GIAN BẰNG ĐẶC TRƯNG BẤT THƯỜNG THỜI TIẾT",
-  shortTitle: "Wildfire Forecasting System v8.7.2",
+  shortTitle: "Wildfire Forecasting System v8.7.3-LC",
   author: "Hoàng Bảo Lâm",
   year: "2026",
   competition: "Cuộc thi Khoa học Kĩ thuật — Sở GD&ĐT Hà Nội",
@@ -20,31 +20,31 @@ export const PROJECT = {
   school: "Trường THCS&THPT LÊ QUÝ ĐÔN",
   teacher: "Lê Xuân Tân",
   class: "9E4",
-  modelVersion: "v8.7.2",
-  featureCount: 42,
+  modelVersion: "v8.7.3-LC",
+  featureCount: 46,
 };
 
 export const KEY_FINDINGS = [
   {
-    label: "AUROC South cold-start OOD (v8.7.2)",
-    value: "0,904",
-    sub: "± 0,0008 · 5 seeds",
+    label: "AUROC South cold-start OOD (v8.7.3-LC)",
+    value: "0,917",
+    sub: "± 0,0003 · 5 seeds",
     tone: "good" as const,
-    note: "Cold-start thật (no fire history) — tăng từ 0,584 v8.6 nhờ anomaly features",
+    note: "v8.7.3-LC with land cover — tăng từ 0,904 v8.7.2 nhờ LC features",
   },
   {
-    label: "ΔAUROC từ weather anomalies",
-    value: "+0,0056",
-    sub: "t = 17,08 · 5 seeds · sig.",
+    label: "ΔAUROC từ land cover features",
+    value: "+0,0099",
+    sub: "t = 15,34 · 5 seeds · sig.",
     tone: "good" as const,
-    note: "7 anomaly features cải thiện cold-start spatial OOD (E2 result)",
+    note: "ESA WorldCover 2021 (forest, agriculture, urban, water proportions)",
   },
   {
-    label: "Operational: +18 fires/year @ K=10%",
-    value: "418",
-    sub: "vs 400 baseline · t = 8,07 · sig.",
+    label: "Giảm cảnh báo sai (FP)",
+    value: "−515 cells",
+    sub: "t = −5,69 · 5 seeds · sig.",
     tone: "good" as const,
-    note: "Cùng ngân sách cảnh báo 10% cells/ngày — bắt thêm 18 fires, precision cao hơn",
+    note: "Ít cảnh báo sai hơn — precision +2,1pp. Giải quyết over-prediction Nam.",
   },
   {
     label: "Failure mode phát hiện",
