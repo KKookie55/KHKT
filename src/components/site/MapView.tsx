@@ -136,8 +136,11 @@ export default function MapView() {
     setIsPredicting(true);
     const startTime = Date.now();
     try {
+      // Use v9.0 model: each cell uses its actual lat/lon
       const inputs = VIETNAM_GRID.map(cell => ({
-        temp, humidity, wind, rain, daysSinceRain, region: cell.region,
+        lat: cell.lat,
+        lon: cell.lon,
+        temp, humidity, wind, rain, daysSinceRain,
       }));
       const response = await fetch('/api/predict', {
         method: 'POST',
@@ -168,7 +171,8 @@ export default function MapView() {
         source: weatherSource,
         forecastDate: forecastDateStr,
       }, ...prev].slice(0, 10));
-    } catch {
+    } catch (err) {
+      console.warn('Predict failed:', err);
       const predMap = new Map<number, any>();
       VIETNAM_GRID.forEach(cell => {
         predMap.set(cell.id, {
@@ -285,7 +289,7 @@ export default function MapView() {
         <div className="absolute top-0 left-0 right-0 z-[600] bg-slate-800/90 backdrop-blur text-white text-[10px] text-center py-1 px-2 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
-            Dự báo t+{horizon} cho {forecastDateStr} · Model v8.6 real-time · Open-Meteo · Auto-refresh 10ph
+            Dự báo t+{horizon} cho {forecastDateStr} · Model v9.0 (forest fire, 61 features) · Open-Meteo · Auto-refresh 10ph
           </span>
           <span className="opacity-75 font-mono text-[9px]">
             {isAutoRefreshing ? 'ĐANG CẬP NHẬT…' : `Lần sau: ${countdownStr}`}
@@ -355,10 +359,10 @@ export default function MapView() {
         <div className="absolute top-8 left-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2 text-[10px]">
           <div className="flex items-center gap-1.5">
             {isPredicting ? <Loader2 className="h-3 w-3 animate-spin text-slate-500" /> : <Cpu className="h-3 w-3 text-slate-600" />}
-            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : "Model v8.6"}</span>
+            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : "Model v9.0"}</span>
           </div>
           <div className="mt-1 text-slate-500">
-            <div>AUROC IID: <span className="font-mono text-slate-700">0,9463</span></div>
+            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">0,921</span></div>
             <div>Dự báo: <span className="font-mono text-slate-700">t+{horizon} ({forecastDateStr})</span></div>
             {lastPredictTime !== null && <div>Latency: <span className="font-mono text-slate-700">{lastPredictTime}ms</span></div>}
             {lastRefreshTime && (
@@ -559,7 +563,7 @@ export default function MapView() {
 
           <div className="p-2 rounded-md bg-slate-100 ring-1 ring-slate-200 text-[10px] text-slate-600 leading-relaxed">
             <Cpu className="inline h-3 w-3 text-slate-500 mr-1" />
-            Model v8.6: XGBoost + Isotonic, 35 features. AUROC IID = 0,9463.
+            Model v9.0: XGBoost + Isotonic, 61 features (cold baseline + anomalies + LC + geo + NDVI). Multi-task forest fire (high-confidence). AUROC South cold-start OOD = 0,921.
           </div>
         </div>
       </div>
