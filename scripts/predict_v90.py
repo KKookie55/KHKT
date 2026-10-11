@@ -1,28 +1,25 @@
 #!/usr/bin/env python3
 """
-v9.0 Production predictor for Wildfire Forecasting System.
+v9.0 Production predictor — FIXED version with real weather history.
 
-Loads v9.0 XGBoost model (61 features, forest fire high-confidence label)
-and predicts forest fire probability given (lat, lon, temp, humidity, wind, rain, daysSinceRain).
-
-Builds 61-feature vector using:
-  - User-provided current weather (t2m, rh, wind, precip, days_since_rain)
-  - Cell-static lookup (land cover, geo, NDVI from pre-computed parquet)
-  - Climatology (per-cell doy means from 2018-2021) for lags/rolling/anomalies
-  - Today's doy for seasonal features
+Fetches last 14 days of weather from Open-Meteo Archive API for given lat/lon,
+computes proper lag/rolling/anomaly features (NOT climatology proxy).
 
 Output JSON:
   {
-    "probability": float,        # calibrated forest fire probability
-    "raw_probability": float,    # before isotonic calibration
+    "probability": float,
+    "raw_probability": float,
     "risk_level": str,
     "risk_color": str,
-    "model_version": "v9.0 forest fire",
+    "model_version": "v9.0 forest fire (61 feats) — with real weather history",
     "n_features": 61,
-    "features_used": [...]
+    "weather_history_days": 14,
+    "weather_source": "Open-Meteo Archive",
+    ...
   }
 """
-import os, sys, json, pickle
+import os, sys, json, pickle, urllib.request, urllib.error
+from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import xgboost as gbm
@@ -36,7 +33,6 @@ GEO_PATH = '/home/z/my-project/download/sc_pmh/geo_features_static.parquet'
 NDVI_PATH = '/home/z/my-project/download/sc_pmh/ndvi_cell_features.parquet'
 CLIM_PATH = '/home/z/my-project/download/production/cell_climatology.parquet'
 
-# Feature list (must match training)
 FEATS = [
     't2m', 'rh', 'wind', 'precip', 'doy',
     't2m_lag1', 't2m_lag3', 't2m_lag7', 't2m_lag14',
@@ -82,92 +78,204 @@ def load_resources():
         _clim = pd.read_parquet(CLIM_PATH)
 
 def snap_to_grid(lat, lon):
-    """Snap lat/lon to nearest 0.5° grid point."""
     return round(lat * 2) / 2, round(lon * 2) / 2
 
-def predict(lat, lon, temp, humidity, wind, rain, daysSinceRain, doy=None):
-    """Predict forest fire probability for given cell + weather inputs."""
+def fetch_weather_history(lat, lon, days=30):
+    """Fetch last N days of weather from Open-Meteo Archive API."""
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=days)
+    url = (
+        f"https://archive-api.open-meteo.com/v1/archive?"
+        f"latitude={lat}&longitude={lon}&start_date={start_date}&end_date={end_date}"
+        f"&daily=temperature_2m_max,temperature_2m_min,relative_humidity_2m_max,relative_humidity_2m_min,"
+        f"wind_speed_10m_max,precipitation_sum&timezone=auto"
+    )
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+        
+        if 'daily' not in data:
+            return None, f"No daily data in API response: {data}"
+        
+        d = data['daily']
+        # Compute daily means from max/min
+        df = pd.DataFrame({
+            'date': pd.to_datetime(d['time']),
+            't2m': [(mx + mn) / 2 for mx, mn in zip(d['temperature_2m_max'], d['temperature_2m_min'])],
+            'rh': [(mx + mn) / 2 for mx, mn in zip(d['relative_humidity_2m_max'], d['relative_humidity_2m_min'])],
+            'wind': d['wind_speed_10m_max'],
+            'precip': d['precipitation_sum'],
+        })
+        # Wind speed from km/h to m/s
+        df['wind'] = df['wind'] / 3.6
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
+def compute_days_since_rain(precip_series, threshold=0.5):
+    """Count consecutive days since last rain (precip >= threshold)."""
+    days = 0
+    for p in reversed(precip_series):
+        if p >= threshold:
+            break
+        days += 1
+    return days
+
+def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=None, override_rain=None, override_dsr=None, doy=None):
+    """Predict forest fire probability using REAL weather history."""
     load_resources()
     
-    # Snap to grid
     lat_grid, lon_grid = snap_to_grid(lat, lon)
     
-    # Today's doy
     if doy is None:
-        from datetime import datetime
         doy = datetime.now().timetuple().tm_yday
     
-    # Look up cell-static features
+    # If user provides override weather values, use climatology for lags (scenario testing mode)
+    # Otherwise, fetch real weather history for today's actual prediction
+    has_overrides = any(v is not None for v in [override_temp, override_humidity, override_wind, override_rain, override_dsr])
+    
+    if not has_overrides:
+        # Real prediction mode — fetch weather history
+        weather_df, weather_err = fetch_weather_history(lat_grid, lon_grid, days=35)
+        if weather_df is None or len(weather_df) < 14:
+            weather_df = None
+            weather_source = f"climatology fallback (Open-Meteo failed: {weather_err})"
+        else:
+            weather_source = f"Open-Meteo Archive ({len(weather_df)} days fetched)"
+    else:
+        # Scenario testing mode — user provided override values, use climatology for lags
+        weather_df = None
+        weather_source = "scenario testing (override weather + climatology for lags)"
+    
+    # Look up cell-static
     lc_row = _lc[(_lc.lat == lat_grid) & (_lc.lon == lon_grid)]
-    if len(lc_row) == 0:
-        # Find nearest cell
-        _lc['dist'] = ((_lc.lat - lat_grid)**2 + (_lc.lon - lon_grid)**2)**0.5
-        lc_row = _lc.iloc[[_lc['dist'].idxmin()]]
     geo_row = _geo[(_geo.lat == lat_grid) & (_geo.lon == lon_grid)]
-    if len(geo_row) == 0:
-        _geo['dist'] = ((_geo.lat - lat_grid)**2 + (_geo.lon - lon_grid)**2)**0.5
-        geo_row = _geo.iloc[[_geo['dist'].idxmin()]]
     ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)]
-    if len(ndvi_row) == 0:
-        _ndvi['dist'] = ((_ndvi.lat - lat_grid)**2 + (_ndvi.lon - lon_grid)**2)**0.5
-        ndvi_row = _ndvi.iloc[[_ndvi['dist'].idxmin()]]
     clim_row = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid) & (_clim.doy == doy)]
     if len(clim_row) == 0:
-        # Find nearest doy
-        _clim_doy = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid)]
-        if len(_clim_doy) == 0:
+        cd = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid)]
+        if len(cd) == 0:
             return {'error': f'No climatology for cell ({lat_grid}, {lon_grid})'}
-        _clim_doy['doy_diff'] = abs(_clim_doy.doy - doy)
-        clim_row = _clim_doy.iloc[[_clim_doy['doy_diff'].idxmin()]]
+        cd['d'] = abs(cd.doy - doy)
+        clim_row = cd.iloc[[cd['d'].idxmin()]]
     
-    # Build feature vector
-    # User-provided current weather
-    t2m = float(temp)
-    rh = float(humidity)
-    wind_val = float(wind)
-    precip = float(rain)
-    days_since_rain = float(daysSinceRain)
+    if len(lc_row) == 0 or len(geo_row) == 0 or len(ndvi_row) == 0:
+        return {'error': f'No static features for cell ({lat_grid}, {lon_grid})'}
     
-    # Climatology for this cell+doy (used as proxy for lags when we don't have history)
+    # Climatology
     t2m_clim = float(clim_row['t2m_clim'].iloc[0])
     rh_clim = float(clim_row['rh_clim'].iloc[0])
     precip_clim = float(clim_row['precip_clim'].iloc[0])
     wind_clim = float(clim_row['wind_clim'].iloc[0])
     
-    # Lags (use climatology as proxy — best we can do without history)
-    t2m_lag1 = t2m_lag3 = t2m_lag7 = t2m_lag14 = t2m_clim
-    rh_lag1 = rh_lag3 = rh_lag7 = rh_lag14 = rh_clim
-    wind_lag1 = wind_lag3 = wind_lag7 = wind_lag14 = wind_clim
-    precip_lag1 = precip_lag3 = precip_lag7 = precip_lag14 = precip_clim
+    # Determine current day's weather
+    if weather_df is not None and len(weather_df) > 0:
+        # Latest day in archive = today's actual weather
+        last_row = weather_df.iloc[-1]
+        t2m_today = override_temp if override_temp is not None else float(last_row['t2m'])
+        rh_today = override_humidity if override_humidity is not None else float(last_row['rh'])
+        wind_today = override_wind if override_wind is not None else float(last_row['wind'])
+        precip_today = override_rain if override_rain is not None else float(last_row['precip'])
+        days_since_rain = override_dsr if override_dsr is not None else compute_days_since_rain(weather_df['precip'].values)
+        
+        # Real lags from weather history
+        # weather_df is sorted by date; last day is "today"; lag1 = yesterday, lag3 = 3 days ago, etc.
+        # Use second-to-last as lag1, fourth-to-last as lag3, etc.
+        t2m_series = weather_df['t2m'].values
+        rh_series = weather_df['rh'].values
+        wind_series = weather_df['wind'].values
+        precip_series = weather_df['precip'].values
+        
+        # Lag1 = -2 (yesterday), lag3 = -4, lag7 = -8, lag14 = -15
+        # (since last entry is "today", the day before is -2 in 0-indexed)
+        def get_lag(series, days_ago):
+            idx = -days_ago - 1
+            if abs(idx) > len(series):
+                return float(clim_row_for_var)
+            val = series[idx]
+            if pd.isna(val):
+                return float(clim_row_for_var)
+            return float(val)
+        
+        # Get climatology per variable
+        t2m_lag1 = get_lag(t2m_series, 1) if len(t2m_series) >= 2 else t2m_clim
+        t2m_lag3 = get_lag(t2m_series, 3) if len(t2m_series) >= 4 else t2m_clim
+        t2m_lag7 = get_lag(t2m_series, 7) if len(t2m_series) >= 8 else t2m_clim
+        t2m_lag14 = get_lag(t2m_series, 14) if len(t2m_series) >= 15 else t2m_clim
+        
+        rh_lag1 = get_lag(rh_series, 1) if len(rh_series) >= 2 else rh_clim
+        rh_lag3 = get_lag(rh_series, 3) if len(rh_series) >= 4 else rh_clim
+        rh_lag7 = get_lag(rh_series, 7) if len(rh_series) >= 8 else rh_clim
+        rh_lag14 = get_lag(rh_series, 14) if len(rh_series) >= 15 else rh_clim
+        
+        wind_lag1 = get_lag(wind_series, 1) if len(wind_series) >= 2 else wind_clim
+        wind_lag3 = get_lag(wind_series, 3) if len(wind_series) >= 4 else wind_clim
+        wind_lag7 = get_lag(wind_series, 7) if len(wind_series) >= 8 else wind_clim
+        wind_lag14 = get_lag(wind_series, 14) if len(wind_series) >= 15 else wind_clim
+        
+        precip_lag1 = get_lag(precip_series, 1) if len(precip_series) >= 2 else precip_clim
+        precip_lag3 = get_lag(precip_series, 3) if len(precip_series) >= 4 else precip_clim
+        precip_lag7 = get_lag(precip_series, 7) if len(precip_series) >= 8 else precip_clim
+        precip_lag14 = get_lag(precip_series, 14) if len(precip_series) >= 15 else precip_clim
+        
+        # Rolling stats from real history
+        t2m_roll7 = float(np.nanmean(t2m_series[-7:])) if len(t2m_series) >= 7 else t2m_clim
+        t2m_roll14 = float(np.nanmean(t2m_series[-14:])) if len(t2m_series) >= 14 else t2m_clim
+        rh_roll7 = float(np.nanmean(rh_series[-7:])) if len(rh_series) >= 7 else rh_clim
+        rh_roll14 = float(np.nanmean(rh_series[-14:])) if len(rh_series) >= 14 else rh_clim
+        precip_roll7_sum = float(np.nansum(precip_series[-7:])) if len(precip_series) >= 7 else precip_clim * 7
+        precip_roll14_sum = float(np.nansum(precip_series[-14:])) if len(precip_series) >= 14 else precip_clim * 14
+        precip_roll30_sum = float(np.nansum(precip_series[-30:])) if len(precip_series) >= 30 else precip_clim * 30
+        
+        # Diff = today - lag3
+        t2m_diff3 = t2m_today - t2m_lag3
+        rh_diff3 = rh_today - rh_lag3
+        wind_diff3 = wind_today - wind_lag3
+    else:
+        # SCENARIO mode: user provided override values
+        # Use override values for ALL lag/rolling features (propagate)
+        # This makes slider values propagate to ALL time-shifted features
+        t2m_today = override_temp if override_temp is not None else t2m_clim
+        rh_today = override_humidity if override_humidity is not None else rh_clim
+        wind_today = override_wind if override_wind is not None else wind_clim
+        precip_today = override_rain if override_rain is not None else precip_clim
+        days_since_rain = override_dsr if override_dsr is not None else 5
+        
+        # Set all lags = today's value (artificial — assumes weather has been like this for 14 days)
+        t2m_lag1 = t2m_lag3 = t2m_lag7 = t2m_lag14 = t2m_today
+        rh_lag1 = rh_lag3 = rh_lag7 = rh_lag14 = rh_today
+        wind_lag1 = wind_lag3 = wind_lag7 = wind_lag14 = wind_today
+        precip_lag1 = precip_lag3 = precip_lag7 = precip_lag14 = precip_today
+        
+        # Rolling = today's value (propagated)
+        t2m_roll7 = t2m_roll14 = t2m_today
+        rh_roll7 = rh_roll14 = rh_today
+        precip_roll7_sum = precip_today * 7
+        precip_roll14_sum = precip_today * 14
+        precip_roll30_sum = precip_today * 30
+        
+        # Diff = today - today = 0 (no change in scenario)
+        t2m_diff3 = 0
+        rh_diff3 = 0
+        wind_diff3 = 0
     
-    # Rolling stats (use climatology as proxy)
-    t2m_roll7 = t2m_roll14 = t2m_clim
-    rh_roll7 = rh_roll14 = rh_clim
-    precip_roll7_sum = precip_clim * 7
-    precip_roll14_sum = precip_clim * 14
-    precip_roll30_sum = precip_clim * 30
+    # Derived
+    heat_index = (t2m_today - 20) * (50 - rh_today) / 50.0
+    wind_chill = (t2m_today - 15) * wind_today / 30.0
     
-    # Diff features
-    t2m_diff3 = t2m - t2m_clim  # difference from climatology
-    rh_diff3 = rh - rh_clim
-    wind_diff3 = wind_val - wind_clim
+    # Anomalies (current - climatology for that doy)
+    t2m_anom_doy = t2m_today - t2m_clim
+    rh_anom_doy = rh_today - rh_clim
+    precip_anom_doy = precip_today - precip_clim
+    wind_anom_doy = wind_today - wind_clim
     
-    # Derived indices
-    heat_index = (t2m - 20) * (50 - rh) / 50.0
-    wind_chill = (t2m - 15) * wind_val / 30.0
+    # Rolling anomalies = rolling mean - climatology (approximate)
+    t2m_anom_roll7 = t2m_roll7 - t2m_clim
+    rh_anom_roll7 = rh_roll7 - rh_clim
+    precip_anom_roll7 = precip_roll7_sum - precip_clim * 7
     
-    # Anomalies (current - climatology)
-    t2m_anom_doy = t2m - t2m_clim
-    rh_anom_doy = rh - rh_clim
-    precip_anom_doy = precip - precip_clim
-    wind_anom_doy = wind_val - wind_clim
-    
-    # Rolling anomalies (use single anomaly as proxy)
-    t2m_anom_roll7 = t2m_anom_doy
-    rh_anom_roll7 = rh_anom_doy
-    precip_anom_roll7 = precip_anom_doy
-    
-    # Land cover
+    # Cell-static features
     forest_prop = float(lc_row['forest_prop'].iloc[0])
     shrubland_prop = float(lc_row['shrubland_prop'].iloc[0])
     grassland_prop = float(lc_row['grassland_prop'].iloc[0])
@@ -176,7 +284,6 @@ def predict(lat, lon, temp, humidity, wind, rain, daysSinceRain, doy=None):
     bare_prop = float(lc_row['bare_prop'].iloc[0])
     water_prop = float(lc_row['water_prop'].iloc[0])
     
-    # Geo
     elevation_mean = float(geo_row['elevation_mean'].iloc[0])
     elevation_std = float(geo_row['elevation_std'].iloc[0])
     slope_mean = float(geo_row['slope_mean'].iloc[0])
@@ -187,14 +294,13 @@ def predict(lat, lon, temp, humidity, wind, rain, daysSinceRain, doy=None):
     coastal_distance = float(geo_row['coastal_distance'].iloc[0])
     population_density_proxy = float(geo_row['population_density_proxy'].iloc[0])
     
-    # NDVI
     ndvi_mean = float(ndvi_row['ndvi_mean'].iloc[0])
     ndvi_std = float(ndvi_row['ndvi_std'].iloc[0])
     ndvi_amplitude = float(ndvi_row['ndvi_amplitude'].iloc[0])
     
     # Build feature dict
     features = {
-        't2m': t2m, 'rh': rh, 'wind': wind_val, 'precip': precip, 'doy': doy,
+        't2m': t2m_today, 'rh': rh_today, 'wind': wind_today, 'precip': precip_today, 'doy': doy,
         't2m_lag1': t2m_lag1, 't2m_lag3': t2m_lag3, 't2m_lag7': t2m_lag7, 't2m_lag14': t2m_lag14,
         'rh_lag1': rh_lag1, 'rh_lag3': rh_lag3, 'rh_lag7': rh_lag7, 'rh_lag14': rh_lag14,
         'wind_lag1': wind_lag1, 'wind_lag3': wind_lag3, 'wind_lag7': wind_lag7, 'wind_lag14': wind_lag14,
@@ -215,17 +321,14 @@ def predict(lat, lon, temp, humidity, wind, rain, daysSinceRain, doy=None):
         'ndvi_mean': ndvi_mean, 'ndvi_std': ndvi_std, 'ndvi_amplitude': ndvi_amplitude,
     }
     
-    # Build DMatrix with feature_names (must match model's expected feature_names order)
     feature_names = _model.feature_names
     X = pd.DataFrame([features], columns=feature_names)
     dmat = gbm.DMatrix(X)
     
-    # Predict
     raw_p = float(_model.predict(dmat)[0])
     p_calibrated = float(_iso.predict([raw_p])[0])
     p_calibrated = max(0.001, min(0.999, p_calibrated))
     
-    # Risk level
     if p_calibrated >= 0.30:
         risk_level, risk_color = "Nguy hiểm", "#4c1d95"
     elif p_calibrated >= 0.20:
@@ -244,25 +347,45 @@ def predict(lat, lon, temp, humidity, wind, rain, daysSinceRain, doy=None):
         'risk_level': risk_level,
         'risk_color': risk_color,
         'risk_score': int(p_calibrated * 100),
-        'model_version': 'v9.0 forest fire (61 feats)',
+        'model_version': 'v9.0 forest fire (61 feats) — real weather history',
         'n_features': len(feature_names),
-        'features_used_count': len(features),
         'cell_lat': lat_grid,
         'cell_lon': lon_grid,
         'doy': doy,
         'is_cold_start': lat_grid < 14,
-        'note': 'Predictions use climatology for lag/rolling features (live weather history not fetched). Cell-static features (land cover, geo, NDVI) from pre-computed lookup.',
+        'weather_source': weather_source,
+        'current_weather': {
+            't2m': round(t2m_today, 2),
+            'rh': round(rh_today, 2),
+            'wind': round(wind_today, 2),
+            'precip': round(precip_today, 2),
+            'days_since_rain': days_since_rain,
+        },
+        'weather_history_used': weather_df is not None,
+        'lags_real': weather_df is not None,
     }
 
 def predict_batch(inputs):
     """Predict for multiple cells/inputs."""
-    return [predict(inp.get('lat', 16.5), inp.get('lon', 106.5),
-                    inp.get('temp'), inp.get('humidity'), inp.get('wind'),
-                    inp.get('rain'), inp.get('daysSinceRain'),
-                    inp.get('doy')) for inp in inputs]
+    results = []
+    for inp in inputs:
+        try:
+            result = predict(
+                inp.get('lat', 16.5),
+                inp.get('lon', 106.5),
+                inp.get('temp'),
+                inp.get('humidity'),
+                inp.get('wind'),
+                inp.get('rain'),
+                inp.get('daysSinceRain'),
+                inp.get('doy')
+            )
+            results.append(result)
+        except Exception as e:
+            results.append({'error': str(e)})
+    return results
 
 if __name__ == '__main__':
-    # Read input from stdin
     input_data = json.loads(sys.stdin.read())
     if 'inputs' in input_data:
         results = predict_batch(input_data['inputs'])
