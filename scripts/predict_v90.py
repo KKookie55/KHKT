@@ -425,21 +425,175 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
     }
 
 def predict_batch(inputs):
+    """Predict for multiple cells. FAST path — skip weather fetch per cell, use climatology.
+    
+    For batch mode (MapView with 273 cells), fetching weather per cell would take 3-7 minutes.
+    Instead, use climatology for lags/rolling (constant per cell) + override values for current weather.
+    This is fast (~3s total) and lets UI toggle work instantly.
+    
+    For REAL forecast of single cell (popup), use predict() directly (slow but accurate).
+    """
+    load_resources()
     results = []
     for inp in inputs:
         try:
-            result = predict(
-                inp.get('lat', 16.5),
-                inp.get('lon', 106.5),
-                inp.get('temp'),
-                inp.get('humidity'),
-                inp.get('wind'),
-                inp.get('rain'),
-                inp.get('daysSinceRain'),
-                inp.get('doy'),
-                inp.get('mode', 'forest')
-            )
-            results.append(result)
+            # FAST path: build features without weather fetch
+            lat = inp.get('lat', 16.5)
+            lon = inp.get('lon', 106.5)
+            mode = inp.get('mode', 'forest')
+            doy = inp.get('doy')
+            if doy is None:
+                doy = datetime.now().timetuple().tm_yday
+            
+            lat_grid, lon_grid = snap_to_grid(lat, lon)
+            
+            # Look up cell-static (cached after first call)
+            lc_row = _lc[(_lc.lat == lat_grid) & (_lc.lon == lon_grid)]
+            geo_row = _geo[(_geo.lat == lat_grid) & (_geo.lon == lon_grid)]
+            ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)]
+            clim_row = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid) & (_clim.doy == doy)]
+            if len(clim_row) == 0:
+                cd = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid)]
+                if len(cd) == 0:
+                    results.append({'error': f'No climatology for cell ({lat_grid}, {lon_grid})'})
+                    continue
+                cd['d'] = abs(cd.doy - doy)
+                clim_row = cd.iloc[[cd['d'].idxmin()]]
+            
+            if len(lc_row) == 0 or len(geo_row) == 0 or len(ndvi_row) == 0:
+                results.append({'error': f'No static features for cell ({lat_grid}, {lon_grid})'})
+                continue
+            
+            # Climatology
+            t2m_clim = float(clim_row['t2m_clim'].iloc[0])
+            rh_clim = float(clim_row['rh_clim'].iloc[0])
+            precip_clim = float(clim_row['precip_clim'].iloc[0])
+            wind_clim = float(clim_row['wind_clim'].iloc[0])
+            
+            # Current weather from user override (sliders) — falls back to climatology
+            t2m_today = float(inp.get('temp', t2m_clim))
+            rh_today = float(inp.get('humidity', rh_clim))
+            wind_today = float(inp.get('wind', wind_clim))
+            precip_today = float(inp.get('rain', precip_clim))
+            days_since_rain = float(inp.get('daysSinceRain', 5))
+            
+            # FAST: use CLIMATOLOGY for all lag/rolling (realistic per-cell averages)
+            # Not today's value (that creates unrealistic uniform pattern)
+            # Override values only affect current weather + anomalies
+            t2m_lag1 = t2m_lag3 = t2m_lag7 = t2m_lag14 = t2m_clim
+            rh_lag1 = rh_lag3 = rh_lag7 = rh_lag14 = rh_clim
+            wind_lag1 = wind_lag3 = wind_lag7 = wind_lag14 = wind_clim
+            precip_lag1 = precip_lag3 = precip_lag7 = precip_lag14 = precip_clim
+            
+            t2m_roll7 = t2m_roll14 = t2m_clim
+            rh_roll7 = rh_roll14 = rh_clim
+            precip_roll7_sum = precip_clim * 7
+            precip_roll14_sum = precip_clim * 14
+            precip_roll30_sum = precip_clim * 30
+            
+            # Diff = today - climatology (real anomaly)
+            t2m_diff3 = t2m_today - t2m_clim
+            rh_diff3 = rh_today - rh_clim
+            wind_diff3 = wind_today - wind_clim
+            
+            # Derived
+            heat_index = (t2m_today - 20) * (50 - rh_today) / 50.0
+            wind_chill = (t2m_today - 15) * wind_today / 30.0
+            
+            # Anomalies
+            t2m_anom_doy = t2m_today - t2m_clim
+            rh_anom_doy = rh_today - rh_clim
+            precip_anom_doy = precip_today - precip_clim
+            wind_anom_doy = wind_today - wind_clim
+            
+            t2m_anom_roll7 = t2m_anom_doy
+            rh_anom_roll7 = rh_anom_doy
+            precip_anom_roll7 = precip_anom_roll7 if False else precip_today * 7 - precip_clim * 7
+            
+            # Cell-static
+            features = {
+                't2m': t2m_today, 'rh': rh_today, 'wind': wind_today, 'precip': precip_today, 'doy': doy,
+                't2m_lag1': t2m_lag1, 't2m_lag3': t2m_lag3, 't2m_lag7': t2m_lag7, 't2m_lag14': t2m_lag14,
+                'rh_lag1': rh_lag1, 'rh_lag3': rh_lag3, 'rh_lag7': rh_lag7, 'rh_lag14': rh_lag14,
+                'wind_lag1': wind_lag1, 'wind_lag3': wind_lag3, 'wind_lag7': wind_lag7, 'wind_lag14': wind_lag14,
+                'precip_lag1': precip_lag1, 'precip_lag3': precip_lag3, 'precip_lag7': precip_lag7, 'precip_lag14': precip_lag14,
+                't2m_roll7': t2m_roll7, 't2m_roll14': t2m_roll14, 'rh_roll7': rh_roll7, 'rh_roll14': rh_roll14,
+                'precip_roll7_sum': precip_roll7_sum, 'precip_roll14_sum': precip_roll14_sum, 'precip_roll30_sum': precip_roll30_sum,
+                'days_since_rain': days_since_rain,
+                't2m_diff3': t2m_diff3, 'rh_diff3': rh_diff3, 'wind_diff3': wind_diff3,
+                'heat_index': heat_index, 'wind_chill': wind_chill,
+                't2m_anom_doy': t2m_anom_doy, 'rh_anom_doy': rh_anom_doy,
+                'precip_anom_doy': precip_anom_doy, 'wind_anom_doy': wind_anom_doy,
+                't2m_anom_roll7': t2m_anom_roll7, 'rh_anom_roll7': rh_anom_roll7, 'precip_anom_roll7': precip_anom_roll7,
+                'forest_prop': float(lc_row['forest_prop'].iloc[0]),
+                'shrubland_prop': float(lc_row['shrubland_prop'].iloc[0]),
+                'grassland_prop': float(lc_row['grassland_prop'].iloc[0]),
+                'agriculture_prop': float(lc_row['agriculture_prop'].iloc[0]),
+                'urban_prop': float(lc_row['urban_prop'].iloc[0]),
+                'bare_prop': float(lc_row['bare_prop'].iloc[0]),
+                'water_prop': float(lc_row['water_prop'].iloc[0]),
+                'elevation_mean': float(geo_row['elevation_mean'].iloc[0]),
+                'elevation_std': float(geo_row['elevation_std'].iloc[0]),
+                'slope_mean': float(geo_row['slope_mean'].iloc[0]),
+                'koppen_Cwa': int(geo_row['koppen_Cwa'].iloc[0]),
+                'koppen_Am': int(geo_row['koppen_Am'].iloc[0]),
+                'koppen_Aw': int(geo_row['koppen_Aw'].iloc[0]),
+                'latitude_band': int(geo_row['latitude_band'].iloc[0]),
+                'coastal_distance': float(geo_row['coastal_distance'].iloc[0]),
+                'population_density_proxy': float(geo_row['population_density_proxy'].iloc[0]),
+                'ndvi_mean': float(ndvi_row['ndvi_mean'].iloc[0]),
+                'ndvi_std': float(ndvi_row['ndvi_std'].iloc[0]),
+                'ndvi_amplitude': float(ndvi_row['ndvi_amplitude'].iloc[0]),
+            }
+            
+            # Select model based on mode
+            if mode == 'any':
+                active_model = _model_any
+                active_iso = _iso_any
+                model_label = 'any fire'
+            else:
+                active_model = _model
+                active_iso = _iso
+                model_label = 'forest fire (high-conf)'
+            
+            X = pd.DataFrame([features], columns=active_model.feature_names)
+            dmat = gbm.DMatrix(X)
+            raw_p = float(active_model.predict(dmat)[0])
+            p_calibrated = float(active_iso.predict([raw_p])[0])
+            p_calibrated = max(0.001, min(0.999, p_calibrated))
+            
+            if p_calibrated >= 0.30:
+                risk_level, risk_color = "Nguy hiểm", "#4c1d95"
+            elif p_calibrated >= 0.20:
+                risk_level, risk_color = "Rất cao", "#7f1d1d"
+            elif p_calibrated >= 0.10:
+                risk_level, risk_color = "Cao", "#dc2626"
+            elif p_calibrated >= 0.05:
+                risk_level, risk_color = "Trung bình", "#f59e0b"
+            else:
+                risk_level, risk_color = "Thấp", "#22c55e"
+            
+            results.append({
+                'probability': p_calibrated,
+                'raw_probability': raw_p,
+                'calibrated_probability': p_calibrated,
+                'risk_level': risk_level,
+                'risk_color': risk_color,
+                'risk_score': int(p_calibrated * 100),
+                'model_version': f'v9.0 {model_label} (61 feats)',
+                'mode': mode,
+                'n_features': len(active_model.feature_names),
+                'cell_lat': lat_grid,
+                'cell_lon': lon_grid,
+                'doy': doy,
+                'is_cold_start': lat_grid < 14,
+                'current_weather': {
+                    't2m': round(t2m_today, 2), 'rh': round(rh_today, 2),
+                    'wind': round(wind_today, 2), 'precip': round(precip_today, 2),
+                    'days_since_rain': days_since_rain,
+                },
+                'weather_source': 'climatology-based (fast batch mode)',
+            })
         except Exception as e:
             results.append({'error': str(e)})
     return results
