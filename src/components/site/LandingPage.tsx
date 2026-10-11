@@ -87,8 +87,8 @@ export default function LandingPage({ onTryNow }: LandingPageProps) {
             {[
               { label: "Số ô-ngày", value: "598.143" },
               { label: "Số ô lưới 0,5°", value: "273" },
-              { label: "Features", value: "42" },
-              { label: "Mô hình", value: "v8.7.2" },
+              { label: "Features", value: "61" },
+              { label: "Mô hình", value: "v9.0" },
             ].map((s, i) => (
               <div key={i} className="text-center p-3 rounded-md bg-slate-50/80 ring-1 ring-slate-200 backdrop-blur-sm">
                 <div className="text-base font-bold text-slate-900">{s.value}</div>

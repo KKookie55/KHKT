@@ -82,6 +82,7 @@ export default function MapView() {
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [nextRefreshIn, setNextRefreshIn] = useState<number>(600); // seconds
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
+  const [predMode, setPredMode] = useState<"forest" | "any">("forest");
   const REFRESH_INTERVAL = 600; // 10 minutes in seconds
 
   const activeBasemap = BASEMAPS.find(b => b.id === basemapId) ?? BASEMAPS[0];
@@ -136,11 +137,12 @@ export default function MapView() {
     setIsPredicting(true);
     const startTime = Date.now();
     try {
-      // Use v9.0 model: each cell uses its actual lat/lon
+      // Use v9.0 model: each cell uses its actual lat/lon + selected mode (forest/any)
       const inputs = VIETNAM_GRID.map(cell => ({
         lat: cell.lat,
         lon: cell.lon,
         temp, humidity, wind, rain, daysSinceRain,
+        mode: predMode,
       }));
       const response = await fetch('/api/predict', {
         method: 'POST',
@@ -186,7 +188,7 @@ export default function MapView() {
     } finally {
       setIsPredicting(false);
     }
-  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr]);
+  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr, predMode]);
 
   useEffect(() => {
     const timer = setTimeout(() => { fetchPredictions(); }, 500);
@@ -289,7 +291,7 @@ export default function MapView() {
         <div className="absolute top-0 left-0 right-0 z-[600] bg-slate-800/90 backdrop-blur text-white text-[10px] text-center py-1 px-2 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
-            Dự báo t+{horizon} cho {forecastDateStr} · Model v9.0 (forest fire, 61 features) · Open-Meteo · Auto-refresh 10ph
+            Dự báo t+{horizon} cho {forecastDateStr} · Model v9.0 ({predMode === "forest" ? "🌲 cháy RỪNG" : "🔥 cháy BẤT KỲ"}, 61 features) · Open-Meteo · Auto-refresh 10ph
           </span>
           <span className="opacity-75 font-mono text-[9px]">
             {isAutoRefreshing ? 'ĐANG CẬP NHẬT…' : `Lần sau: ${countdownStr}`}
@@ -491,6 +493,42 @@ export default function MapView() {
               <Toggle label={`Ô lưới (${VIETNAM_GRID.length} ô)`} checked={showCells} onChange={setShowCells} />
               <Toggle label={`Điểm cháy (${FIRE_POINTS.length})`} checked={showFirePoints} onChange={setShowFirePoints} />
               <Toggle label="Thành phố" checked={showCities} onChange={setShowCities} />
+            </div>
+          </div>
+
+          {/* Prediction mode toggle (NEW) */}
+          <div>
+            <Label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide mb-2 block">
+              <Cpu className="inline h-3 w-3 mr-1" />Chế độ dự báo
+            </Label>
+            <div className="bg-white p-2 rounded-md ring-1 ring-slate-200">
+              <div className="flex rounded-md ring-1 ring-slate-200 overflow-hidden">
+                <button
+                  onClick={() => setPredMode("forest")}
+                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    predMode === "forest"
+                      ? "bg-emerald-600 text-white"
+                      : "bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  🌲 Cháy RỪNG
+                </button>
+                <button
+                  onClick={() => setPredMode("any")}
+                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${
+                    predMode === "any"
+                      ? "bg-orange-600 text-white"
+                      : "bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  🔥 Cháy BẤT KỲ
+                </button>
+              </div>
+              <p className="mt-1.5 text-[9px] text-slate-500 leading-tight">
+                {predMode === "forest"
+                  ? "Lọc cháy nông nghiệp, chỉ giữ high-confidence (FRP cao = cháy rừng thật)"
+                  : "Tất cả MODIS detection — bao gồm cháy nông nghiệp"}
+              </p>
             </div>
           </div>
 

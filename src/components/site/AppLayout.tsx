@@ -40,7 +40,7 @@ export default function AppLayout({ onBackToLanding }: AppLayoutProps) {
           </button>
           <div className="h-3 w-px bg-slate-300" />
           <div className="text-[11px] text-slate-500 truncate">
-            Sản phẩm dự thi KHKT 2026 · Hoàng Bảo Lâm · THCS&THPT LÊ QUÝ ĐÔN · v8.7.2
+            Sản phẩm dự thi KHKT 2026 · Hoàng Bảo Lâm · THCS&THPT LÊ QUÝ ĐÔN · v9.0
           </div>
         </div>
         <div className="text-[11px] text-slate-400 hidden sm:block">
@@ -74,7 +74,7 @@ export default function AppLayout({ onBackToLanding }: AppLayoutProps) {
             <div>· 598.143 ô-ngày</div>
             <div>· 273 ô lưới 0,5°</div>
             <div>· 2018-2023</div>
-            <div>· 42 features (35 + 7 anom)</div>
+            <div>· 61 features (35 cold + 7 anom + 7 LC + 9 geo + 3 NDVI)</div>
             <div>· 5 seeds · 5 spatial splits</div>
           </div>
         </aside>

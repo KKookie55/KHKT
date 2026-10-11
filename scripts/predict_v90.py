@@ -24,28 +24,38 @@ import xgboost as gbm
 from sklearn.isotonic import IsotonicRegression
 
 PROD = '/home/z/my-project/download/production'
-MODEL_PATH = os.path.join(PROD, 'model.json')
-ISO_PATH = os.path.join(PROD, 'iso.pkl')
+MODEL_PATH = os.path.join(PROD, 'model.json')           # forest fire model (high-conf)
+MODEL_ANY_PATH = os.path.join(PROD, 'model_any_fire.json')  # any fire model
+ISO_PATH = os.path.join(PROD, 'iso.pkl')                  # forest fire iso
+ISO_ANY_PATH = os.path.join(PROD, 'iso_any_fire.pkl')     # any fire iso
 LC_PATH = '/home/z/my-project/download/sc_pmh/landcover_expanded.parquet'
 GEO_PATH = '/home/z/my-project/download/sc_pmh/geo_features_static.parquet'
 NDVI_PATH = '/home/z/my-project/download/sc_pmh/ndvi_cell_features.parquet'
 CLIM_PATH = os.path.join(PROD, 'cell_climatology.parquet')
 
 _model = None
+_model_any = None
 _iso = None
+_iso_any = None
 _lc = None
 _geo = None
 _ndvi = None
 _clim = None
 
 def load_resources():
-    global _model, _iso, _lc, _geo, _ndvi, _clim
+    global _model, _model_any, _iso, _iso_any, _lc, _geo, _ndvi, _clim
     if _model is None:
         _model = gbm.Booster()
         _model.load_model(MODEL_PATH)
+    if _model_any is None:
+        _model_any = gbm.Booster()
+        _model_any.load_model(MODEL_ANY_PATH)
     if _iso is None:
         with open(ISO_PATH, 'rb') as f:
             _iso = pickle.load(f)
+    if _iso_any is None:
+        with open(ISO_ANY_PATH, 'rb') as f:
+            _iso_any = pickle.load(f)
     if _lc is None:
         _lc = pd.read_parquet(LC_PATH)
     if _geo is None:
@@ -126,8 +136,12 @@ def compute_days_since_rain(precip_series, threshold=0.5):
         days += 1
     return days
 
-def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=None, override_rain=None, override_dsr=None, doy=None):
-    """Predict forest fire probability with REAL weather history + REAL forecast."""
+def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=None, override_rain=None, override_dsr=None, doy=None, mode='forest'):
+    """Predict fire probability with REAL weather history + REAL forecast.
+    
+    mode='forest' → forest fire model (high-confidence, lọc cháy nông nghiệp)
+    mode='any'    → any fire model (tất cả MODIS detection)
+    """
     load_resources()
     
     lat_grid, lon_grid = snap_to_grid(lat, lon)
@@ -342,12 +356,22 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
         'ndvi_mean': ndvi_mean, 'ndvi_std': ndvi_std, 'ndvi_amplitude': ndvi_amplitude,
     }
     
-    feature_names = _model.feature_names
+    feature_names = _model.feature_names  # both models share same 61 features
     X = pd.DataFrame([features], columns=feature_names)
     dmat = gbm.DMatrix(X)
     
-    raw_p = float(_model.predict(dmat)[0])
-    p_calibrated = float(_iso.predict([raw_p])[0])
+    # Select model based on mode
+    if mode == 'any':
+        active_model = _model_any
+        active_iso = _iso_any
+        model_label = 'any fire'
+    else:
+        active_model = _model
+        active_iso = _iso
+        model_label = 'forest fire (high-conf)'
+    
+    raw_p = float(active_model.predict(dmat)[0])
+    p_calibrated = float(active_iso.predict([raw_p])[0])
     p_calibrated = max(0.001, min(0.999, p_calibrated))
     
     if p_calibrated >= 0.30:
@@ -380,7 +404,8 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
         'risk_level': risk_level,
         'risk_color': risk_color,
         'risk_score': int(p_calibrated * 100),
-        'model_version': 'v9.0 forest fire (61 feats) — real forecast',
+        'model_version': f'v9.0 {model_label} (61 feats) — real forecast',
+        'mode': mode,
         'n_features': len(feature_names),
         'cell_lat': lat_grid,
         'cell_lon': lon_grid,
@@ -411,7 +436,8 @@ def predict_batch(inputs):
                 inp.get('wind'),
                 inp.get('rain'),
                 inp.get('daysSinceRain'),
-                inp.get('doy')
+                inp.get('doy'),
+                inp.get('mode', 'forest')
             )
             results.append(result)
         except Exception as e:
@@ -432,6 +458,7 @@ if __name__ == '__main__':
             input_data.get('wind'),
             input_data.get('rain'),
             input_data.get('daysSinceRain'),
-            input_data.get('doy')
+            input_data.get('doy'),
+            input_data.get('mode', 'forest')
         )
         print(json.dumps(result))
