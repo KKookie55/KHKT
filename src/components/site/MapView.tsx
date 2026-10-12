@@ -120,8 +120,8 @@ export default function MapView() {
   const cellPredictions = useMemo(() => {
     return VIETNAM_GRID.map(cell => {
       const pred = modelPredictions.get(cell.id);
-      if (!pred) return { ...cell, probability: cell.baseRisk, riskLevel: "—", riskColor: "#94a3b8" };
-      const finalProb = Math.min(0.99, Math.max(0.01, pred.probability * 0.6 + cell.baseRisk * 0.4));
+      if (!pred || pred.error) return { ...cell, probability: 0, riskLevel: "Lỗi", riskColor: "#94a3b8" };
+      const finalProb = Math.min(0.99, Math.max(0.001, pred.probability));
       return { ...cell, probability: finalProb, riskLevel: pred.risk_level, riskColor: pred.risk_color };
     });
   }, [modelPredictions]);
@@ -175,12 +175,14 @@ export default function MapView() {
       }, ...prev].slice(0, 10));
     } catch (err) {
       console.warn('Predict failed:', err);
+      // Show ERROR state — do NOT use fake baseRisk values
       const predMap = new Map<number, any>();
       VIETNAM_GRID.forEach(cell => {
         predMap.set(cell.id, {
-          probability: cell.baseRisk,
-          risk_level: cell.baseRisk >= 0.5 ? "Cao" : cell.baseRisk >= 0.3 ? "Trung bình" : "Thấp",
-          risk_color: cellColor(cell.baseRisk),
+          probability: 0,
+          risk_level: "Lỗi",
+          risk_color: "#94a3b8",
+          error: true,
         });
       });
       setModelPredictions(predMap);
@@ -302,7 +304,7 @@ export default function MapView() {
           <TileLayer key={activeBasemap.id} url={activeBasemap.url} attribution={activeBasemap.attribution} subdomains={activeBasemap.subdomains || "abc"} maxZoom={activeBasemap.maxZoom} />
           {showCells && cellPredictions.map((c) => (
             <CircleMarker key={c.id} center={[c.lat, c.lon]} radius={5}
-              pathOptions={{ color: cellColor(c.probability), fillColor: cellColor(c.probability), fillOpacity: cellOpacity(c.probability), weight: 0.5 }}
+              pathOptions={{ color: "#1f2937", fillColor: c.riskColor, fillOpacity: 0.8, weight: 0.5 }}
               eventHandlers={{ click: () => { setSelectedCell(c); fetchRealWeather(c.lat, c.lon); } }}>
               <Popup>
                 <div className="text-xs">

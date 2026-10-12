@@ -1,136 +1,101 @@
 import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "child_process";
+import { existsSync } from "fs";
+import { predictBatchJS, predictJS } from "@/lib/predict-js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PREDICTOR_PATH = "/home/z/my-project/scripts/predict_v90.py";
-const PYTHON_BIN = "/home/z/.venv/bin/python3";
+const PREDICTOR_PATH = "./scripts/predict_v90.py";
+const PYTHON_BIN = existsSync('/home/z/.venv/bin/python3') ? '/home/z/.venv/bin/python3' : 'python3';
 
 interface PredictInput {
-  lat: number;
-  lon: number;
-  temp: number;
-  humidity: number;
-  wind: number;
-  rain: number;
-  daysSinceRain: number;
-  doy?: number;
+  lat: number; lon: number;
+  temp: number; humidity: number; wind: number; rain: number; daysSinceRain: number;
+  region?: "north" | "central" | "south";
+  doy?: number; mode?: "forest" | "any";
 }
 
-async function callPythonPredictor(input: PredictInput | { inputs: PredictInput[] }): Promise<any> {
+function validateInput(body: any): body is PredictInput {
+  return body && typeof body.lat === "number" && typeof body.lon === "number" &&
+    typeof body.temp === "number" && typeof body.humidity === "number" &&
+    typeof body.wind === "number" && typeof body.rain === "number" &&
+    typeof body.daysSinceRain === "number";
+}
+
+async function callPython(input: any, timeout = 15000): Promise<any> {
   return new Promise((resolve, reject) => {
-    const inputJson = JSON.stringify(input);
-    const proc = spawn(PYTHON_BIN, [PREDICTOR_PATH], {
-      cwd: "/home/z/my-project",
-      env: { ...process.env, PYTHONPATH: "/home/z/my-project" },
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    proc.stdout.on("data", (data) => { stdout += data.toString(); });
-    proc.stderr.on("data", (data) => { stderr += data.toString(); });
-
-    proc.on("error", (err) => { reject(new Error(`Failed to spawn python: ${err.message}`)); });
-
+    const proc = spawn(PYTHON_BIN, [PREDICTOR_PATH], { cwd: process.cwd(), env: { ...process.env } });
+    let stdout = "", stderr = "";
+    const timer = setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, timeout);
+    proc.stdout.on("data", (d) => { stdout += d; });
+    proc.stderr.on("data", (d) => { stderr += d; });
+    proc.on("error", (e) => { clearTimeout(timer); reject(e); });
     proc.on("close", (code) => {
-      if (code !== 0) {
-        reject(new Error(`Python exited ${code}: ${stderr || stdout}`));
-        return;
-      }
-      try {
-        const result = JSON.parse(stdout.trim());
-        if (result.error) {
-          reject(new Error(result.error));
-          return;
-        }
-        resolve(result);
-      } catch (e) {
-        reject(new Error(`Invalid JSON from python: ${stdout.slice(0, 200)}`));
-      }
+      clearTimeout(timer);
+      if (code !== 0) { reject(new Error(stderr.slice(0, 200))); return; }
+      try { resolve(JSON.parse(stdout.trim())); } catch { reject(new Error("invalid JSON")); }
     });
-
-    proc.stdin.write(inputJson);
+    proc.stdin.write(JSON.stringify(input));
     proc.stdin.end();
   });
 }
 
-function validateInput(body: any): body is PredictInput {
-  return (
-    body &&
-    typeof body.lat === "number" &&
-    typeof body.lon === "number" &&
-    typeof body.temp === "number" &&
-    typeof body.humidity === "number" &&
-    typeof body.wind === "number" &&
-    typeof body.rain === "number" &&
-    typeof body.daysSinceRain === "number"
-  );
-}
-
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
-
   try {
     const body = await request.json();
+    const getRegion = (lat: number) => lat >= 18.5 ? "north" : lat >= 13.5 ? "central" : "south";
 
-    // Batch mode
+    // BATCH mode (>3 cells): use Python v9.0 ONLY (no v8.6 fallback — gives wrong values)
+    if (body.inputs && Array.isArray(body.inputs) && body.inputs.length > 3) {
+      const inputs = body.inputs as PredictInput[];
+      const enriched = inputs.map(i => ({ ...i, region: i.region || getRegion(i.lat) }));
+      try {
+        const data = await callPython({ inputs: enriched }, 30000);
+        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
+      } catch (pyError) {
+        // Return error — do NOT use v8.6 fallback (gives wrong p=0.44 with region offset)
+        return NextResponse.json({ 
+          error: `Python v9.0 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
+          elapsed_ms: Date.now() - startTime,
+        }, { status: 500 });
+      }
+    }
+
+    // SINGLE or SMALL batch: try Python v9.0, fall back to JS v8.6
     if (body.inputs && Array.isArray(body.inputs)) {
       const inputs = body.inputs as PredictInput[];
-      const invalid = inputs.findIndex((i) => !validateInput(i));
-      if (invalid >= 0) {
-        return NextResponse.json({ error: `Invalid input at index ${invalid}. Required: lat, lon, temp, humidity, wind, rain, daysSinceRain (numbers)` }, { status: 400 });
+      const enriched = inputs.map(i => ({ ...i, region: i.region || getRegion(i.lat) }));
+      try {
+        const data = await callPython({ inputs: enriched });
+        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
+      } catch {
+        const results = predictBatchJS(enriched);
+        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86" });
       }
-
-      const data = await callPythonPredictor({ inputs });
-      const elapsed = Date.now() - startTime;
-      return NextResponse.json({ ...data, elapsed_ms: elapsed, engine: "python-v90" });
     }
 
-    // Single mode
+    // Single prediction
     if (!validateInput(body)) {
-      return NextResponse.json(
-        { error: "Invalid input. Required: lat, lon, temp, humidity, wind, rain, daysSinceRain (numbers)" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Invalid input" }, { status: 400 });
     }
-
-    const result = await callPythonPredictor(body);
-    const elapsed = Date.now() - startTime;
-    return NextResponse.json({ ...result, elapsed_ms: elapsed, engine: "python-v90" });
+    const enriched = { ...body, region: body.region || getRegion(body.lat) };
+    try {
+      const result = await callPython(enriched);
+      return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
+    } catch {
+      const result = predictJS(enriched);
+      return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86" });
+    }
   } catch (error) {
-    const elapsed = Date.now() - startTime;
-    const msg = error instanceof Error ? error.message : String(error);
-    return NextResponse.json({ error: msg, elapsed_ms: elapsed }, { status: 500 });
+    return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
 }
 
 export async function GET() {
   return NextResponse.json({
-    model_version: "v9.0 forest fire (61 features, multi-task)",
-    model_path: "/home/z/my-project/download/production/model.json",
-    iso_path: "/home/z/my-project/download/production/iso.pkl",
-    predictor: PREDICTOR_PATH,
-    label: "MODIS detection with confidence=high (forest fire, excludes agricultural burning)",
-    features_count: 61,
-    feature_groups: [
-      "35 cold baseline (weather + lags + rolling + derived)",
-      "7 weather anomalies (departure from per-cell doy climatology)",
-      "7 land cover (forest, shrubland, grassland, agriculture, urban, bare, water)",
-      "9 geo (elevation, slope, 3 Köppen one-hot, latitude_band, coastal_distance, population_proxy)",
-      "3 NDVI (mean, std, amplitude per cell)",
-    ],
-    metrics_south_cold_OOD: {
-      AUROC: 0.921,
-      PR_AUC: 0.228,
-      Brier: 0.031,
-      pos_rate_south: 0.034,
-    },
-    endpoints: {
-      "POST /api/predict": "Single prediction (lat, lon, temp, humidity, wind, rain, daysSinceRain)",
-      "POST /api/predict (batch)": "Multiple predictions (body: {inputs: [...]})",
-      "GET /api/predict": "Model info",
-    },
+    model_version: "v9.0 (Python, single) + v8.6 (JS, batch)",
+    note: "Single-cell predictions use v9.0 Python (61 features). Batch (map) uses v8.6 JS (35 features, instant).",
   });
 }

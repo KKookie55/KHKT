@@ -90,7 +90,7 @@ export default function HistoricalReplay() {
   const [showFirePoints, setShowFirePoints] = useState(true);
   const [showColdStartOverlay, setShowColdStartOverlay] = useState(true);
   const [basemap, setBasemap] = useState<typeof BASEMAPS[number]["id"]>("osm");
-  const [predMode, setPredMode] = useState<PredictionMode>("forest");
+  const [hrPredMode, setHrPredMode] = useState<PredictionMode>("forest");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -112,12 +112,12 @@ export default function HistoricalReplay() {
   const stats = useMemo(() => {
     if (!currentDate) return null;
     const cells = currentDate.cells;
-    const pField = predMode === "forest" ? "p" : "p_any";
-    const fireField = predMode === "forest" ? "fire" : "fire_any";
+    const pField = hrPredMode === "forest" ? "p" : "p_any";
+    const fireField = hrPredMode === "forest" ? "fire" : "fire_any";
     const n_high = cells.filter(c => c[pField] >= 0.20).length;
     const n_severe = cells.filter(c => c[pField] >= 0.30).length;
     const fires_in_high = cells.filter(c => c[pField] >= 0.20 && c[fireField] === 1).length;
-    const fires_total = predMode === "forest" ? currentDate.n_fires : currentDate.n_fires_any;
+    const fires_total = hrPredMode === "forest" ? currentDate.n_fires : currentDate.n_fires_any;
     const recall = fires_total > 0 ? fires_in_high / fires_total : 0;
     const precision = n_high > 0 ? fires_in_high / n_high : 0;
     return {
@@ -125,10 +125,10 @@ export default function HistoricalReplay() {
       n_fires: fires_total,
       n_high, n_severe,
       recall, precision,
-      p_max: predMode === "forest" ? currentDate.p_max : currentDate.p_any_max,
-      p_mean: predMode === "forest" ? currentDate.p_mean : currentDate.p_any_mean,
+      p_max: hrPredMode === "forest" ? currentDate.p_max : currentDate.p_any_max,
+      p_mean: hrPredMode === "forest" ? currentDate.p_mean : currentDate.p_any_mean,
     };
-  }, [currentDate, predMode]);
+  }, [currentDate, hrPredMode]);
 
   if (loading) {
     return (
@@ -150,9 +150,9 @@ export default function HistoricalReplay() {
     );
   }
 
-  const pField = predMode === "forest" ? "p" : "p_any";
-  const fireField = predMode === "forest" ? "fire" : "fire_any";
-  const metrics = predMode === "forest"
+  const pField = hrPredMode === "forest" ? "p" : "p_any";
+  const fireField = hrPredMode === "forest" ? "fire" : "fire_any";
+  const metrics = hrPredMode === "forest"
     ? data.metadata.metrics_south_cold_OOD_forest_fire
     : data.metadata.metrics_south_cold_OOD_any_fire;
 
@@ -183,7 +183,7 @@ export default function HistoricalReplay() {
         <div className="mt-8 grid grid-cols-1 md:grid-cols-5 gap-4">
           <div className="md:col-span-1">
             <Label className="text-stone-700 text-sm font-medium">Chế độ dự báo</Label>
-            <Select value={predMode} onValueChange={(v: any) => setPredMode(v)}>
+            <Select value={hrPredMode} onValueChange={(v: any) => setHrPredMode(v)}>
               <SelectTrigger className="w-full mt-1">
                 <SelectValue />
               </SelectTrigger>
@@ -247,12 +247,12 @@ export default function HistoricalReplay() {
         <motion.div
           initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}
           className={`mt-4 p-3 rounded-lg border text-sm ${
-            predMode === "forest"
+            hrPredMode === "forest"
               ? "bg-green-50 border-green-300 text-green-900"
               : "bg-orange-50 border-orange-300 text-orange-900"
           }`}
         >
-          {predMode === "forest" ? (
+          {hrPredMode === "forest" ? (
             <div className="flex items-start gap-2">
               <TreePine className="h-5 w-5 text-green-700 mt-0.5 shrink-0" />
               <div>
@@ -289,7 +289,7 @@ export default function HistoricalReplay() {
               <CardHeader className="pb-2">
                 <CardTitle className="flex items-center gap-2 text-stone-900">
                   <MapPin className="h-5 w-5" />
-                  Bản đồ dự báo {predMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} — {currentDate.date}
+                  Bản đồ dự báo {hrPredMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} — {currentDate.date}
                 </CardTitle>
                 <CardDescription>
                   {stats?.n_cells} ô lưới 0,5° · {stats?.n_fires} điểm cháy · p_max={stats?.p_max.toFixed(3)} · p_mean={stats?.p_mean.toFixed(3)}
@@ -308,7 +308,7 @@ export default function HistoricalReplay() {
                     />
                     {/* Predicted probability cells (using selected mode's p) */}
                     {currentDate.cells.map((c, i) => {
-                      const p = predMode === "forest" ? c.p : c.p_any;
+                      const p = hrPredMode === "forest" ? c.p : c.p_any;
                       const fill = riskColor(p);
                       const isOOD = c.lat < 14;
                       const opacity = showColdStartOverlay
@@ -316,7 +316,7 @@ export default function HistoricalReplay() {
                         : 0.75;
                       return (
                         <CircleMarker
-                          key={`cell-${i}-${predMode}`}
+                          key={`cell-${i}-${hrPredMode}`}
                           center={[c.lat, c.lon]}
                           radius={11}
                           pathOptions={{ color: "#1f2937", weight: 0.5, fillColor: fill, fillOpacity: opacity }}
@@ -354,7 +354,7 @@ export default function HistoricalReplay() {
                     {/* Fire points overlay — uses selected mode's fire label */}
                     {showFirePoints && currentDate.cells.filter(c => c[fireField] === 1).map((c, i) => (
                       <CircleMarker
-                        key={`fire-${i}-${predMode}`}
+                        key={`fire-${i}-${hrPredMode}`}
                         center={[c.lat, c.lon]}
                         radius={6}
                         pathOptions={{ color: "#000000", weight: 2, fillColor: "#ef4444", fillOpacity: 1 }}
@@ -362,7 +362,7 @@ export default function HistoricalReplay() {
                         <Popup>
                           <div className="text-xs">
                             <div className="font-bold">
-                              {predMode === "forest" ? "🌲 Forest fire (high-conf)" : "🔥 MODIS Active Fire"}
+                              {hrPredMode === "forest" ? "🌲 Forest fire (high-conf)" : "🔥 MODIS Active Fire"}
                             </div>
                             <div>{c.lat.toFixed(2)}°N, {c.lon.toFixed(2)}°E</div>
                             <div>P (cháy rừng): {(c.p * 100).toFixed(1)}%</div>
@@ -384,7 +384,7 @@ export default function HistoricalReplay() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-stone-900 flex items-center gap-2 text-base">
                   <Activity className="h-4 w-4" />
-                  Phân loại {predMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} (p ≥ 0,20)
+                  Phân loại {hrPredMode === "forest" ? "cháy RỪNG" : "cháy BẤT KỲ"} (p ≥ 0,20)
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
@@ -398,7 +398,7 @@ export default function HistoricalReplay() {
                       <div className="bg-red-50 border border-red-200 rounded p-2">
                         <div className="text-red-700 font-bold text-lg">{stats.n_fires}</div>
                         <div className="text-stone-600 text-xs">
-                          {predMode === "forest" ? "Cháy rừng thực tế" : "Tổng fires thực tế"}
+                          {hrPredMode === "forest" ? "Cháy rừng thực tế" : "Tổng fires thực tế"}
                         </div>
                       </div>
                     </div>
