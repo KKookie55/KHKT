@@ -23,15 +23,18 @@ import pandas as pd
 import xgboost as gbm
 from sklearn.isotonic import IsotonicRegression
 
-PROD = '/home/z/my-project/download/production'
-MODEL_PATH = os.path.join(PROD, 'model.json')           # forest fire model (high-conf)
-MODEL_ANY_PATH = os.path.join(PROD, 'model_any_fire.json')  # any fire model
-ISO_PATH = os.path.join(PROD, 'iso.pkl')                  # forest fire iso
-ISO_ANY_PATH = os.path.join(PROD, 'iso_any_fire.pkl')     # any fire iso
-LC_PATH = '/home/z/my-project/download/sc_pmh/landcover_expanded.parquet'
-GEO_PATH = '/home/z/my-project/download/sc_pmh/geo_features_static.parquet'
-NDVI_PATH = '/home/z/my-project/download/sc_pmh/ndvi_cell_features.parquet'
-CLIM_PATH = os.path.join(PROD, 'cell_climatology.parquet')
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+MODEL_DIR = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v90')
+
+MODEL_PATH = os.path.join(MODEL_DIR, 'model.json')
+MODEL_ANY_PATH = os.path.join(MODEL_DIR, 'model_any_fire.json')
+ISO_PATH = os.path.join(MODEL_DIR, 'iso.pkl')
+ISO_ANY_PATH = os.path.join(MODEL_DIR, 'iso_any_fire.pkl')
+CLIM_PATH = os.path.join(MODEL_DIR, 'cell_climatology.parquet')
+LC_PATH = os.path.join(MODEL_DIR, 'landcover_lookup.parquet')
+GEO_PATH = os.path.join(MODEL_DIR, 'geo_features.parquet')
+NDVI_PATH = os.path.join(MODEL_DIR, 'ndvi_features.parquet')  # May not exist — will fallback
 
 _model = None
 _model_any = None
@@ -61,7 +64,10 @@ def load_resources():
     if _geo is None:
         _geo = pd.read_parquet(GEO_PATH)
     if _ndvi is None:
-        _ndvi = pd.read_parquet(NDVI_PATH)
+        try:
+            _ndvi = pd.read_parquet(NDVI_PATH)
+        except:
+            _ndvi = None  # Will use placeholder NDVI values
     if _clim is None:
         _clim = pd.read_parquet(CLIM_PATH)
 
@@ -168,7 +174,7 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
     # Look up cell-static
     lc_row = _lc[(_lc.lat == lat_grid) & (_lc.lon == lon_grid)]
     geo_row = _geo[(_geo.lat == lat_grid) & (_geo.lon == lon_grid)]
-    ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)]
+    ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)] if _ndvi is not None else pd.DataFrame()
     clim_row = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid) & (_clim.doy == doy)]
     if len(clim_row) == 0:
         cd = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid)]
@@ -177,7 +183,7 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
         cd['d'] = abs(cd.doy - doy)
         clim_row = cd.iloc[[cd['d'].idxmin()]]
     
-    if len(lc_row) == 0 or len(geo_row) == 0 or len(ndvi_row) == 0:
+    if len(lc_row) == 0 or len(geo_row) == 0:
         return {'error': f'No static features for cell ({lat_grid}, {lon_grid})'}
     
     # Climatology
@@ -330,9 +336,9 @@ def predict(lat, lon, override_temp=None, override_humidity=None, override_wind=
     coastal_distance = float(geo_row['coastal_distance'].iloc[0])
     population_density_proxy = float(geo_row['population_density_proxy'].iloc[0])
     
-    ndvi_mean = float(ndvi_row['ndvi_mean'].iloc[0])
-    ndvi_std = float(ndvi_row['ndvi_std'].iloc[0])
-    ndvi_amplitude = float(ndvi_row['ndvi_amplitude'].iloc[0])
+    ndvi_mean = float(ndvi_row['ndvi_mean'].iloc[0]) if len(ndvi_row) > 0 else 0.6
+    ndvi_std = float(ndvi_row['ndvi_std'].iloc[0]) if len(ndvi_row) > 0 else 0.1
+    ndvi_amplitude = float(ndvi_row['ndvi_amplitude'].iloc[0]) if len(ndvi_row) > 0 else 0.4
     
     features = {
         't2m': t2m_today, 'rh': rh_today, 'wind': wind_today, 'precip': precip_today, 'doy': doy,
@@ -450,7 +456,7 @@ def predict_batch(inputs):
             # Look up cell-static (cached after first call)
             lc_row = _lc[(_lc.lat == lat_grid) & (_lc.lon == lon_grid)]
             geo_row = _geo[(_geo.lat == lat_grid) & (_geo.lon == lon_grid)]
-            ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)]
+            ndvi_row = _ndvi[(_ndvi.lat == lat_grid) & (_ndvi.lon == lon_grid)] if _ndvi is not None else pd.DataFrame()
             clim_row = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid) & (_clim.doy == doy)]
             if len(clim_row) == 0:
                 cd = _clim[(_clim.lat == lat_grid) & (_clim.lon == lon_grid)]
@@ -460,7 +466,7 @@ def predict_batch(inputs):
                 cd['d'] = abs(cd.doy - doy)
                 clim_row = cd.iloc[[cd['d'].idxmin()]]
             
-            if len(lc_row) == 0 or len(geo_row) == 0 or len(ndvi_row) == 0:
+            if len(lc_row) == 0 or len(geo_row) == 0:
                 results.append({'error': f'No static features for cell ({lat_grid}, {lon_grid})'})
                 continue
             
@@ -541,9 +547,9 @@ def predict_batch(inputs):
                 'latitude_band': int(geo_row['latitude_band'].iloc[0]),
                 'coastal_distance': float(geo_row['coastal_distance'].iloc[0]),
                 'population_density_proxy': float(geo_row['population_density_proxy'].iloc[0]),
-                'ndvi_mean': float(ndvi_row['ndvi_mean'].iloc[0]),
-                'ndvi_std': float(ndvi_row['ndvi_std'].iloc[0]),
-                'ndvi_amplitude': float(ndvi_row['ndvi_amplitude'].iloc[0]),
+                'ndvi_mean': float(ndvi_row['ndvi_mean'].iloc[0]) if len(ndvi_row) > 0 else 0.6,
+                'ndvi_std': float(ndvi_row['ndvi_std'].iloc[0]) if len(ndvi_row) > 0 else 0.1,
+                'ndvi_amplitude': float(ndvi_row['ndvi_amplitude'].iloc[0]) if len(ndvi_row) > 0 else 0.4,
             }
             
             # Select model based on mode
