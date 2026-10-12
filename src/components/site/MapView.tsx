@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -11,8 +11,8 @@ import {
   AlertTriangle, Layers, Gauge, Map as MapIcon, X, Loader2, Cpu, Clock, History,
 } from "lucide-react";
 import {
-  VIETNAM_GRID, VIETNAM_CITIES, SCENARIOS, FIRE_POINTS,
-  type FireCell, type FirePoint,
+  VIETNAM_GRID, VIETNAM_CITIES, SCENARIOS,
+  type FireCell,
 } from "@/lib/data";
 import { cellColor, cellOpacity } from "@/lib/predict";
 
@@ -65,9 +65,7 @@ export default function MapView() {
   const [daysSinceRain, setDaysSinceRain] = useState(8);
   const [showCells, setShowCells] = useState(true);
   const [showCities, setShowCities] = useState(true);
-  const [showFirePoints, setShowFirePoints] = useState(true);
   const [selectedCell, setSelectedCell] = useState<FireCell | null>(null);
-  const [selectedFirePoint, setSelectedFirePoint] = useState<FirePoint | null>(null);
   const [basemapId, setBasemapId] = useState<BasemapId>("osm");
   const [horizon, setHorizon] = useState(1);
   const [modelPredictions, setModelPredictions] = useState<Map<number, any>>(new Map());
@@ -320,29 +318,6 @@ export default function MapView() {
               </Popup>
             </CircleMarker>
           ))}
-          {showFirePoints && FIRE_POINTS.map((fp) => (
-            <Fragment key={`fire-wrap-${fp.id}`}>
-              <CircleMarker key={`fire-glow-${fp.id}`} center={[fp.lat, fp.lon]} radius={Math.max(8, Math.min(16, 8 + fp.frp / 12))}
-                pathOptions={{ color: fp.source === "MODIS" ? "#dc2626" : "#f59e0b", fillColor: fp.source === "MODIS" ? "#dc2626" : "#f59e0b", fillOpacity: 0.15, weight: 0 }} interactive={false} />
-              <CircleMarker key={`fire-${fp.id}`} center={[fp.lat, fp.lon]} radius={Math.max(3, Math.min(7, 3 + fp.frp / 25))}
-                pathOptions={{ color: "#ffffff", fillColor: fp.source === "MODIS" ? "#dc2626" : "#f59e0b", fillOpacity: 0.9, weight: 1.5 }}
-                eventHandlers={{ click: () => setSelectedFirePoint(fp) }}>
-                <Popup>
-                  <div className="text-xs">
-                    <div className="font-bold text-slate-900 mb-1">Điểm cháy #{fp.id + 1}</div>
-                    <div className="text-slate-600 mb-2">{fp.lat.toFixed(3)}°N, {fp.lon.toFixed(3)}°E · Vùng: {fp.region === "north" ? "Bắc" : fp.region === "central" ? "Trung" : "Nam"}</div>
-                    <table className="text-[11px] w-full"><tbody>
-                      <tr><td className="text-slate-500 pr-2 py-0.5">Nguồn:</td><td className="font-semibold" style={{ color: fp.source === "MODIS" ? "#dc2626" : "#f59e0b" }}>{fp.source}</td></tr>
-                      <tr><td className="text-slate-500 pr-2 py-0.5">FRP:</td><td className="font-mono font-bold">{fp.frp.toFixed(1)} MW</td></tr>
-                      <tr><td className="text-slate-500 pr-2 py-0.5">Brightness:</td><td className="font-mono">{fp.brightness.toFixed(1)} K</td></tr>
-                      <tr><td className="text-slate-500 pr-2 py-0.5">Confidence:</td><td className="font-mono">{fp.confidence}/100</td></tr>
-                      <tr><td className="text-slate-500 pr-2 py-0.5">Ngày:</td><td className="font-mono">DOY {fp.doy}</td></tr>
-                    </tbody></table>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            </Fragment>
-          ))}
           {showCities && VIETNAM_CITIES.map(city => (
             <CircleMarker key={city.name} center={[city.lat, city.lon]} radius={4}
               pathOptions={{ color: "#0f172a", fillColor: "#0f172a", fillOpacity: 1, weight: 1.5 }}>
@@ -493,7 +468,6 @@ export default function MapView() {
             </Label>
             <div className="bg-white p-3 rounded-md ring-1 ring-slate-200 space-y-1.5">
               <Toggle label={`Ô lưới (${VIETNAM_GRID.length} ô)`} checked={showCells} onChange={setShowCells} />
-              <Toggle label={`Điểm cháy (${FIRE_POINTS.length})`} checked={showFirePoints} onChange={setShowFirePoints} />
               <Toggle label="Thành phố" checked={showCities} onChange={setShowCities} />
             </div>
           </div>
@@ -581,22 +555,6 @@ export default function MapView() {
                 <div className="flex justify-between"><span className="text-slate-500">Tọa độ:</span><span className="font-mono font-semibold">{selectedCell.lat}°N, {selectedCell.lon}°E</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">Vùng:</span><span className="font-semibold">{selectedCell.region === "north" ? "Bắc" : selectedCell.region === "central" ? "Trung" : "Nam"}</span></div>
                 <div className="flex justify-between items-center"><span className="text-slate-500">P(cháy) t+{horizon}:</span><span className="font-mono font-bold text-sm" style={{ color: (selectedCell as any).riskColor || "#94a3b8" }}>{((selectedCell as any).probability * 100).toFixed(1)}%</span></div>
-              </div>
-            </div>
-          )}
-
-          {/* Selected fire point */}
-          {selectedFirePoint && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label className="text-[11px] font-semibold text-slate-700 uppercase">Điểm cháy</Label>
-                <button onClick={() => setSelectedFirePoint(null)} className="text-slate-400 hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
-              </div>
-              <div className="p-3 rounded-md ring-2 ring-slate-400 bg-white text-xs space-y-1.5">
-                <div className="flex justify-between"><span className="text-slate-500">Tọa độ:</span><span className="font-mono">{selectedFirePoint.lat}°N, {selectedFirePoint.lon}°E</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Nguồn:</span><span className="font-semibold" style={{ color: selectedFirePoint.source === "MODIS" ? "#dc2626" : "#f59e0b" }}>{selectedFirePoint.source}</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">FRP:</span><span className="font-mono font-bold">{selectedFirePoint.frp.toFixed(1)} MW</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Confidence:</span><span className="font-mono">{selectedFirePoint.confidence}/100</span></div>
               </div>
             </div>
           )}
