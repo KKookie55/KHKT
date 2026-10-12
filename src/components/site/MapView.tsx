@@ -20,6 +20,7 @@ const MapContainer = dynamic(() => import("react-leaflet").then(m => m.MapContai
 const TileLayer    = dynamic(() => import("react-leaflet").then(m => m.TileLayer),    { ssr: false });
 const CircleMarker = dynamic(() => import("react-leaflet").then(m => m.CircleMarker), { ssr: false });
 const Popup        = dynamic(() => import("react-leaflet").then(m => m.Popup),         { ssr: false });
+const GeoJSON      = dynamic(() => import("react-leaflet").then(m => m.GeoJSON),       { ssr: false });
 
 const BASEMAPS = [
   { id: "osm", name: "OpenStreetMap", url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", attribution: '&copy; OpenStreetMap', subdomains: "abc", maxZoom: 19 },
@@ -81,6 +82,10 @@ export default function MapView() {
   const [nextRefreshIn, setNextRefreshIn] = useState<number>(600); // seconds
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [predMode, setPredMode] = useState<"forest" | "any">("forest");
+  const [showDistricts, setShowDistricts] = useState(false);
+  const [districtAggMode, setDistrictAggMode] = useState<"avg" | "max">("max");
+  const [districtsGeo, setDistrictsGeo] = useState<any>(null);
+  const [cellToDistrict, setCellToDistrict] = useState<Record<number, any> | null>(null);
   const REFRESH_INTERVAL = 600; // 10 minutes in seconds
 
   const activeBasemap = BASEMAPS.find(b => b.id === basemapId) ?? BASEMAPS[0];
@@ -200,6 +205,80 @@ export default function MapView() {
     fetchRealWeather(16.5, 106.5);
   }, [fetchRealWeather]);
 
+  // ===== Lazy-load district GeoJSON + cell→district lookup when toggle on =====
+  useEffect(() => {
+    if (!showDistricts || districtsGeo) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const [geoResp, lookupResp] = await Promise.all([
+          fetch("/data/geo/districts_simple.json"),
+          fetch("/data/geo/cell_to_district.json"),
+        ]);
+        if (!geoResp.ok || !lookupResp.ok) throw new Error("HTTP err");
+        const geo = await geoResp.json();
+        const lookup = await lookupResp.json() as Record<number, any>;
+        if (!cancelled) {
+          setDistrictsGeo(geo);
+          setCellToDistrict(lookup);
+        }
+      } catch (e) {
+        console.error("District data fetch failed:", e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [showDistricts, districtsGeo]);
+
+  // ===== Aggregate cell predictions → district stats =====
+  const districtStats = useMemo(() => {
+    if (!cellToDistrict || !districtsGeo) return null;
+    // Group cells by district_id
+    const byDistrict = new Map<number, { probs: number[]; cells: number[] }>();
+    cellPredictions.forEach(c => {
+      const m = cellToDistrict[c.id];
+      if (!m || m.district_id == null) return;
+      const d = byDistrict.get(m.district_id) ?? { probs: [], cells: [] };
+      d.probs.push(c.probability);
+      d.cells.push(c.id);
+      byDistrict.set(m.district_id, d);
+    });
+    // Build district_id → { p, color, label, cellCount }
+    const result = new Map<number, { p: number; color: string; label: string; cellCount: number }>();
+    byDistrict.forEach((v, did) => {
+      const p = districtAggMode === "max" ? Math.max(...v.probs) : v.probs.reduce((s, x) => s + x, 0) / v.probs.length;
+      let color = "#22c55e";
+      if (p >= 0.7)      color = "#991b1b";
+      else if (p >= 0.5) color = "#dc2626";
+      else if (p >= 0.3) color = "#f59e0b";
+      else if (p >= 0.15) color = "#84cc16";
+      const d = districtsGeo.features[did];
+      const name = d?.properties?.name ?? "?";
+      const prov = d?.properties?.province ?? "?";
+      const type = d?.properties?.type ?? "";
+      result.set(did, {
+        p,
+        color,
+        label: `${type} ${name}, ${prov}`,
+        cellCount: v.probs.length,
+      });
+    });
+    return result;
+  }, [cellToDistrict, districtsGeo, cellPredictions, districtAggMode]);
+
+  // Style function for GeoJSON districts (interactive:false so clicks pass through to cells)
+  const districtStyle = useCallback((feature: any) => {
+    const did = feature?.properties?.id;
+    const s = districtStats?.get(did);
+    if (!s) return { color: "#94a3b8", weight: 0.5, fillColor: "#cbd5e1", fillOpacity: 0.3, interactive: false };
+    return {
+      color: "#475569",
+      weight: 0.6,
+      fillColor: s.color,
+      fillOpacity: 0.5,
+      interactive: false,
+    } as any;
+  }, [districtStats]);
+
   // ===== Auto-refresh every 10 minutes (pauses when tab hidden) =====
   const autoRefresh = useCallback(async () => {
     setIsAutoRefreshing(true);
@@ -300,14 +379,25 @@ export default function MapView() {
 
         <MapContainer center={[16.5, 106.5]} zoom={6} className="h-full w-full" scrollWheelZoom={true} maxBounds={[[7.5, 100.5], [24.5, 110.5]]} maxBoundsViscosity={0.9} minZoom={5} maxZoom={12}>
           <TileLayer key={activeBasemap.id} url={activeBasemap.url} attribution={activeBasemap.attribution} subdomains={activeBasemap.subdomains || "abc"} maxZoom={activeBasemap.maxZoom} />
-          {showCells && cellPredictions.map((c) => (
+          {showDistricts && districtsGeo && (
+            <GeoJSON key={`districts-${districtAggMode}-${predMode}-${horizon}`} data={districtsGeo} style={districtStyle} />
+          )}
+          {showCells && cellPredictions.map((c) => {
+            const dm = cellToDistrict?.[c.id];
+            return (
             <CircleMarker key={c.id} center={[c.lat, c.lon]} radius={5}
               pathOptions={{ color: "#1f2937", fillColor: c.riskColor, fillOpacity: 0.8, weight: 0.5 }}
               eventHandlers={{ click: () => { setSelectedCell(c); fetchRealWeather(c.lat, c.lon); } }}>
               <Popup>
                 <div className="text-xs">
                   <div className="font-bold text-slate-900 mb-1">Ô #{c.id + 1}</div>
-                  <div className="text-slate-600 mb-2">{c.lat}°N, {c.lon}°E</div>
+                  <div className="text-slate-600 mb-1">{c.lat}°N, {c.lon}°E</div>
+                  {dm && (
+                    <div className="mb-2 px-1.5 py-1 rounded bg-slate-100 ring-1 ring-slate-200 text-[10px] text-slate-700">
+                      <span className="text-slate-500">Thuộc: </span>
+                      <span className="font-semibold">{dm.type} {dm.name}, {dm.province}</span>
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 gap-1">
                     <div className="text-slate-500">P(cháy) t+{horizon}:</div>
                     <div className="font-mono font-bold" style={{ color: c.riskColor }}>{(c.probability * 100).toFixed(1)}%</div>
@@ -317,7 +407,8 @@ export default function MapView() {
                 </div>
               </Popup>
             </CircleMarker>
-          ))}
+            );
+          })}
           {showCities && VIETNAM_CITIES.map(city => (
             <CircleMarker key={city.name} center={[city.lat, city.lon]} radius={4}
               pathOptions={{ color: "#0f172a", fillColor: "#0f172a", fillOpacity: 1, weight: 1.5 }}>
@@ -469,6 +560,25 @@ export default function MapView() {
             <div className="bg-white p-3 rounded-md ring-1 ring-slate-200 space-y-1.5">
               <Toggle label={`Ô lưới (${VIETNAM_GRID.length} ô)`} checked={showCells} onChange={setShowCells} />
               <Toggle label="Thành phố" checked={showCities} onChange={setShowCities} />
+              <Toggle label={`Huyện (${showDistricts && districtsGeo ? districtsGeo.features.length : 710} đv) — overlay`} checked={showDistricts} onChange={setShowDistricts} />
+              {showDistricts && (
+                <div className="mt-1 pt-1 border-t border-slate-100">
+                  <div className="text-[10px] text-slate-500 mb-1">Aggregation mode (cell → huyện):</div>
+                  <div className="flex rounded ring-1 ring-slate-200 overflow-hidden">
+                    <button onClick={() => setDistrictAggMode("max")}
+                      className={`flex-1 px-2 py-1 text-[10px] font-semibold ${districtAggMode === "max" ? "bg-emerald-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}>
+                      Max (mức cao nhất trong huyện)
+                    </button>
+                    <button onClick={() => setDistrictAggMode("avg")}
+                      className={`flex-1 px-2 py-1 text-[10px] font-semibold ${districtAggMode === "avg" ? "bg-emerald-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}>
+                      Avg (trung bình)
+                    </button>
+                  </div>
+                  <div className="text-[9px] text-slate-400 italic mt-1">
+                    Lớp này là overlay hành chính — dự báo v9.0 vẫn chạy ở cấp ô lưới.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

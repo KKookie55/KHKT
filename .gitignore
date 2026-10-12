@@ -85,3 +85,7 @@ public/data/predictions.json
 
 # Old report files (keep originals in download/ which is gitignored)
 Wildfire_Physics_Constrained_ML_Report.pdf
+
+# GADM raw files (large, not needed in git)
+public/data/geo/gadm41_VNM_2.json
+public/data/geo/gadm41_VNM_2.json.zip
