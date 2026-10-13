@@ -131,39 +131,39 @@ export default function MapView() {
   }, [modelPredictions]);
 
   const stats = useMemo(() => {
+    // In v9.1 district mode, compute stats from district predictions
+    if (districtPredictions && districtPredictions.size > 0) {
+      const dp = Array.from(districtPredictions.values()).filter(r => !r.error);
+      const total = dp.length;
+      const high = dp.filter(r => r.probability >= 0.5).length;
+      const avg = dp.reduce((s, r) => s + r.probability, 0) / Math.max(total, 1);
+      return { total, high, avg };
+    }
     const total = cellPredictions.length;
     const high = cellPredictions.filter(c => c.probability >= 0.5).length;
-    const avg = cellPredictions.reduce((s, c) => s + c.probability, 0) / total;
+    const avg = cellPredictions.reduce((s, c) => s + c.probability, 0) / Math.max(total, 1);
     return { total, high, avg };
-  }, [cellPredictions]);
+  }, [cellPredictions, districtPredictions]);
 
   const fetchPredictions = useCallback(async () => {
     setIsPredicting(true);
     const startTime = Date.now();
     try {
-      // District mode (v9.1): if districts toggle on, send district_ids instead of cell lat/lon
-      // Get unique district_ids from cellToDistrict lookup (if loaded)
-      const districtIds: number[] = [];
-      if (showDistricts && cellToDistrict) {
-        const seen = new Set<number>();
-        for (const m of Object.values(cellToDistrict)) {
-          if (m && m.district_id != null && !seen.has(m.district_id)) {
-            seen.add(m.district_id);
-            districtIds.push(m.district_id);
-          }
-        }
-      }
+      // District mode (v9.1): if districts toggle on, send ALL 710 district_ids
+      // (predict_v91.py handles fallback for districts without explicit cell mapping)
+      const ALL_DISTRICT_IDS = Array.from({ length: 710 }, (_, i) => i);
+      const useV91 = showDistricts;  // when district overlay on, use v9.1 for all 710 districts
 
       let inputs: any[];
-      if (districtIds.length > 0) {
-        // V9.1 DISTRICT mode — predictions per district (no need to aggregate)
-        inputs = districtIds.map(did => ({
+      if (useV91) {
+        // V9.1 DISTRICT mode — predictions for ALL 710 districts (v9.1 has fallback for missing features)
+        inputs = ALL_DISTRICT_IDS.map(did => ({
           district_id: did,
           temp, humidity, wind, rain, daysSinceRain,
           mode: predMode,
         }));
       } else {
-        // V9.0 CELL mode — predictions per cell (will aggregate to districts if overlay on)
+        // V9.0 CELL mode — predictions per cell
         inputs = VIETNAM_GRID.map(cell => ({
           lat: cell.lat,
           lon: cell.lon,
@@ -180,7 +180,7 @@ export default function MapView() {
       const data = await response.json();
       const results = data.results as any[];
 
-      if (districtIds.length > 0) {
+      if (useV91) {
         // V9.1: results are per-district; store in districtPredictions map
         const dpredMap = new Map<number, any>();
         results.forEach(r => {
@@ -239,7 +239,7 @@ export default function MapView() {
     } finally {
       setIsPredicting(false);
     }
-  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr, predMode, showDistricts, cellToDistrict]);
+  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr, predMode, showDistricts]);
 
   useEffect(() => {
     const timer = setTimeout(() => { fetchPredictions(); }, 500);
@@ -521,7 +521,7 @@ export default function MapView() {
         <div className="absolute top-8 right-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2.5 text-xs">
           <div className="font-semibold text-slate-700 mb-1.5 text-[11px]">Thống kê t+{horizon}</div>
           <div className="space-y-1">
-            <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">Tổng ô</span><span className="font-mono font-bold text-xs text-slate-900">{stats.total}</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">{districtPredictions.size > 0 ? "Tổng huyện" : "Tổng ô"}</span><span className="font-mono font-bold text-xs text-slate-900">{stats.total}</span></div>
             <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">Nguy cơ cao</span><span className="font-mono font-bold text-xs text-slate-700">{stats.high}</span></div>
             <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">TB</span><span className="font-mono font-bold text-xs text-slate-700">{(stats.avg * 100).toFixed(1)}%</span></div>
           </div>
