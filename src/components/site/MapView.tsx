@@ -86,6 +86,7 @@ export default function MapView() {
   const [districtAggMode, setDistrictAggMode] = useState<"avg" | "max">("max");
   const [districtsGeo, setDistrictsGeo] = useState<any>(null);
   const [cellToDistrict, setCellToDistrict] = useState<Record<number, any> | null>(null);
+  const [districtPredictions, setDistrictPredictions] = useState<Map<number, any>>(new Map());
   const REFRESH_INTERVAL = 600; // 10 minutes in seconds
 
   const activeBasemap = BASEMAPS.find(b => b.id === basemapId) ?? BASEMAPS[0];
@@ -140,13 +141,36 @@ export default function MapView() {
     setIsPredicting(true);
     const startTime = Date.now();
     try {
-      // Use v9.0 model: each cell uses its actual lat/lon + selected mode (forest/any)
-      const inputs = VIETNAM_GRID.map(cell => ({
-        lat: cell.lat,
-        lon: cell.lon,
-        temp, humidity, wind, rain, daysSinceRain,
-        mode: predMode,
-      }));
+      // District mode (v9.1): if districts toggle on, send district_ids instead of cell lat/lon
+      // Get unique district_ids from cellToDistrict lookup (if loaded)
+      const districtIds: number[] = [];
+      if (showDistricts && cellToDistrict) {
+        const seen = new Set<number>();
+        for (const m of Object.values(cellToDistrict)) {
+          if (m && m.district_id != null && !seen.has(m.district_id)) {
+            seen.add(m.district_id);
+            districtIds.push(m.district_id);
+          }
+        }
+      }
+
+      let inputs: any[];
+      if (districtIds.length > 0) {
+        // V9.1 DISTRICT mode — predictions per district (no need to aggregate)
+        inputs = districtIds.map(did => ({
+          district_id: did,
+          temp, humidity, wind, rain, daysSinceRain,
+          mode: predMode,
+        }));
+      } else {
+        // V9.0 CELL mode — predictions per cell (will aggregate to districts if overlay on)
+        inputs = VIETNAM_GRID.map(cell => ({
+          lat: cell.lat,
+          lon: cell.lon,
+          temp, humidity, wind, rain, daysSinceRain,
+          mode: predMode,
+        }));
+      }
       const response = await fetch('/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -155,13 +179,35 @@ export default function MapView() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const results = data.results as any[];
-      const predMap = new Map<number, any>();
-      VIETNAM_GRID.forEach((cell, i) => {
-        const pred = results[i];
-        if (!pred) return;
-        predMap.set(cell.id, pred);
-      });
-      setModelPredictions(predMap);
+
+      if (districtIds.length > 0) {
+        // V9.1: results are per-district; store in districtPredictions map
+        const dpredMap = new Map<number, any>();
+        results.forEach(r => {
+          if (r && r.district_id != null) dpredMap.set(r.district_id, r);
+        });
+        setDistrictPredictions(dpredMap);
+        // ALSO populate cell-level predictions from district (so cell popups show district p)
+        const cpredMap = new Map<number, any>();
+        VIETNAM_GRID.forEach(cell => {
+          const m = cellToDistrict?.[cell.id];
+          if (m && m.district_id != null) {
+            const dp = dpredMap.get(m.district_id);
+            if (dp) cpredMap.set(cell.id, dp);
+          }
+        });
+        setModelPredictions(cpredMap);
+      } else {
+        // V9.0: results are per-cell, store directly
+        const predMap = new Map<number, any>();
+        VIETNAM_GRID.forEach((cell, i) => {
+          const pred = results[i];
+          if (!pred) return;
+          predMap.set(cell.id, pred);
+        });
+        setModelPredictions(predMap);
+        setDistrictPredictions(new Map()); // clear
+      }
       setLastPredictTime(Date.now() - startTime);
 
       // Add to history
@@ -193,7 +239,7 @@ export default function MapView() {
     } finally {
       setIsPredicting(false);
     }
-  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr, predMode]);
+  }, [temp, humidity, wind, rain, daysSinceRain, horizon, weatherSource, stats.avg, stats.high, forecastDateStr, predMode, showDistricts, cellToDistrict]);
 
   useEffect(() => {
     const timer = setTimeout(() => { fetchPredictions(); }, 500);
@@ -229,10 +275,35 @@ export default function MapView() {
     return () => { cancelled = true; };
   }, [showDistricts, districtsGeo]);
 
-  // ===== Aggregate cell predictions → district stats =====
+  // ===== Aggregate cell predictions → district stats (used as fallback when v9.1 not loaded) =====
   const districtStats = useMemo(() => {
     if (!cellToDistrict || !districtsGeo) return null;
-    // Group cells by district_id
+
+    // PRIMARY: if v9.1 district predictions exist, use them directly
+    if (districtPredictions && districtPredictions.size > 0) {
+      const result = new Map<number, { p: number; color: string; label: string; cellCount: number }>();
+      districtPredictions.forEach((pred, did) => {
+        const p = Math.min(0.99, Math.max(0.001, pred.probability || 0));
+        let color = "#22c55e";
+        if (p >= 0.7)      color = "#991b1b";
+        else if (p >= 0.5) color = "#dc2626";
+        else if (p >= 0.3) color = "#f59e0b";
+        else if (p >= 0.15) color = "#84cc16";
+        const d = districtsGeo.features[did];
+        const name = d?.properties?.name ?? pred.district_name ?? "?";
+        const prov = d?.properties?.province ?? pred.province ?? "?";
+        const type = d?.properties?.type ?? "";
+        result.set(did, {
+          p,
+          color,
+          label: `${type} ${name}, ${prov}`,
+          cellCount: 0, // not tracked in v9.1 mode
+        });
+      });
+      return result;
+    }
+
+    // FALLBACK: aggregate cell predictions → district (v9.0 mode)
     const byDistrict = new Map<number, { probs: number[]; cells: number[] }>();
     cellPredictions.forEach(c => {
       const m = cellToDistrict[c.id];
@@ -242,7 +313,6 @@ export default function MapView() {
       d.cells.push(c.id);
       byDistrict.set(m.district_id, d);
     });
-    // Build district_id → { p, color, label, cellCount }
     const result = new Map<number, { p: number; color: string; label: string; cellCount: number }>();
     byDistrict.forEach((v, did) => {
       const p = districtAggMode === "max" ? Math.max(...v.probs) : v.probs.reduce((s, x) => s + x, 0) / v.probs.length;
@@ -263,7 +333,7 @@ export default function MapView() {
       });
     });
     return result;
-  }, [cellToDistrict, districtsGeo, cellPredictions, districtAggMode]);
+  }, [cellToDistrict, districtsGeo, cellPredictions, districtAggMode, districtPredictions]);
 
   // Style function for GeoJSON districts (interactive:false so clicks pass through to cells)
   const districtStyle = useCallback((feature: any) => {
@@ -370,7 +440,7 @@ export default function MapView() {
         <div className="absolute top-0 left-0 right-0 z-[600] bg-slate-800/90 backdrop-blur text-white text-[10px] text-center py-1 px-2 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
-            Dự báo t+{horizon} cho {forecastDateStr} · Model v9.0 ({predMode === "forest" ? "🌲 cháy RỪNG" : "🔥 cháy BẤT KỲ"}, 61 features) · Open-Meteo · Auto-refresh 10ph
+            Dự báo t+{horizon} cho {forecastDateStr} · {(showDistricts && districtPredictions.size > 0) ? "Model v9.1 HUYỆN" : "Model v9.0 Ô"} ({predMode === "forest" ? "🌲 cháy RỪNG" : "🔥 cháy BẤT KỲ"}) · Open-Meteo · Auto-refresh 10ph
           </span>
           <span className="opacity-75 font-mono text-[9px]">
             {isAutoRefreshing ? 'ĐANG CẬP NHẬT…' : `Lần sau: ${countdownStr}`}
@@ -429,10 +499,10 @@ export default function MapView() {
         <div className="absolute top-8 left-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2 text-[10px]">
           <div className="flex items-center gap-1.5">
             {isPredicting ? <Loader2 className="h-3 w-3 animate-spin text-slate-500" /> : <Cpu className="h-3 w-3 text-slate-600" />}
-            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : "Model v9.0"}</span>
+            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : (showDistricts && districtPredictions.size > 0 ? "Model v9.1 (Huyện)" : "Model v9.0 (Ô)")}</span>
           </div>
           <div className="mt-1 text-slate-500">
-            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">0,921</span></div>
+            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">{showDistricts && districtPredictions.size > 0 ? "0,931 (v9.1 huyện)" : "0,921 (v9.0 ô)"}</span></div>
             <div>Dự báo: <span className="font-mono text-slate-700">t+{horizon} ({forecastDateStr})</span></div>
             {lastPredictTime !== null && <div>Latency: <span className="font-mono text-slate-700">{lastPredictTime}ms</span></div>}
             {lastRefreshTime && (
@@ -671,7 +741,7 @@ export default function MapView() {
 
           <div className="p-2 rounded-md bg-slate-100 ring-1 ring-slate-200 text-[10px] text-slate-600 leading-relaxed">
             <Cpu className="inline h-3 w-3 text-slate-500 mr-1" />
-            Model v9.0: XGBoost + Isotonic, 61 features (cold baseline + anomalies + LC + geo + NDVI). Multi-task forest fire (high-confidence). AUROC South cold-start OOD = 0,921.
+            Model {(showDistricts && districtPredictions.size > 0) ? "v9.1 (Huyện): XGBoost + Isotonic, 74 features, AUROC=0,931 OOD South" : "v9.0 (Ô): XGBoost + Isotonic, 61 features, AUROC=0,921 OOD South"}. Multi-task forest fire (high-conf MODIS). Cold-start: train Bắc+Trung, test Nam.
           </div>
         </div>
       </div>

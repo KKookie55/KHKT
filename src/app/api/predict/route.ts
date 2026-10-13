@@ -6,26 +6,21 @@ import { predictBatchJS, predictJS } from "@/lib/predict-js";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const PREDICTOR_PATH = "./scripts/predict_v90.py";
+const PREDICTOR_V90 = "./scripts/predict_v90.py";
+const PREDICTOR_V91 = "./scripts/predict_v91.py";
 const PYTHON_BIN = existsSync('/home/z/.venv/bin/python3') ? '/home/z/.venv/bin/python3' : 'python3';
 
 interface PredictInput {
-  lat: number; lon: number;
+  lat?: number; lon?: number;       // v9.0 cell mode
+  district_id?: number;              // v9.1 district mode
   temp: number; humidity: number; wind: number; rain: number; daysSinceRain: number;
   region?: "north" | "central" | "south";
   doy?: number; mode?: "forest" | "any";
 }
 
-function validateInput(body: any): body is PredictInput {
-  return body && typeof body.lat === "number" && typeof body.lon === "number" &&
-    typeof body.temp === "number" && typeof body.humidity === "number" &&
-    typeof body.wind === "number" && typeof body.rain === "number" &&
-    typeof body.daysSinceRain === "number";
-}
-
-async function callPython(input: any, timeout = 15000): Promise<any> {
+function callPython(input: any, scriptPath: string, timeout = 15000): Promise<any> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(PYTHON_BIN, [PREDICTOR_PATH], { cwd: process.cwd(), env: { ...process.env } });
+    const proc = spawn(PYTHON_BIN, [scriptPath], { cwd: process.cwd(), env: { ...process.env } });
     let stdout = "", stderr = "";
     const timer = setTimeout(() => { proc.kill(); reject(new Error("timeout")); }, timeout);
     proc.stdout.on("data", (d) => { stdout += d; });
@@ -33,7 +28,7 @@ async function callPython(input: any, timeout = 15000): Promise<any> {
     proc.on("error", (e) => { clearTimeout(timer); reject(e); });
     proc.on("close", (code) => {
       clearTimeout(timer);
-      if (code !== 0) { reject(new Error(stderr.slice(0, 200))); return; }
+      if (code !== 0) { reject(new Error(stderr.slice(0, 300))); return; }
       try { resolve(JSON.parse(stdout.trim())); } catch { reject(new Error("invalid JSON")); }
     });
     proc.stdin.write(JSON.stringify(input));
@@ -47,28 +42,53 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const getRegion = (lat: number) => lat >= 18.5 ? "north" : lat >= 13.5 ? "central" : "south";
 
-    // BATCH mode (>3 cells): use Python v9.0 ONLY (no v8.6 fallback — gives wrong values)
+    // ===== v9.1 DISTRICT MODE — if any input has district_id, use v9.1 =====
+    if (body.inputs && Array.isArray(body.inputs) && body.inputs.some((i: any) => i.district_id != null)) {
+      try {
+        const data = await callPython(body, PREDICTOR_V91, 60000);  // 60s — district mode can be slower
+        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v91-district" });
+      } catch (pyError) {
+        return NextResponse.json({
+          error: `Python v9.1 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
+          elapsed_ms: Date.now() - startTime,
+        }, { status: 500 });
+      }
+    }
+
+    // ===== v9.0 CELL MODE — lat/lon inputs =====
+    if (body.district_id != null) {
+      // Single district prediction
+      try {
+        const result = await callPython(body, PREDICTOR_V91, 30000);
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v91-district" });
+      } catch (pyError) {
+        return NextResponse.json({
+          error: `Python v9.1 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
+        }, { status: 500 });
+      }
+    }
+
+    // BATCH mode (>3 cells): use Python v9.0 ONLY
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.length > 3) {
       const inputs = body.inputs as PredictInput[];
-      const enriched = inputs.map(i => ({ ...i, region: i.region || getRegion(i.lat) }));
+      const enriched = inputs.map(i => ({ ...i, region: i.region || (i.lat != null ? getRegion(i.lat) : "central") }));
       try {
-        const data = await callPython({ inputs: enriched }, 30000);
+        const data = await callPython({ inputs: enriched }, PREDICTOR_V90, 30000);
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch (pyError) {
-        // Return error — do NOT use v8.6 fallback (gives wrong p=0.44 with region offset)
-        return NextResponse.json({ 
+        return NextResponse.json({
           error: `Python v9.0 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
           elapsed_ms: Date.now() - startTime,
         }, { status: 500 });
       }
     }
 
-    // SINGLE or SMALL batch: try Python v9.0, fall back to JS v8.6
+    // SMALL batch / single cell
     if (body.inputs && Array.isArray(body.inputs)) {
       const inputs = body.inputs as PredictInput[];
-      const enriched = inputs.map(i => ({ ...i, region: i.region || getRegion(i.lat) }));
+      const enriched = inputs.map(i => ({ ...i, region: i.region || (i.lat != null ? getRegion(i.lat!) : "central") }));
       try {
-        const data = await callPython({ inputs: enriched });
+        const data = await callPython({ inputs: enriched }, PREDICTOR_V90);
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
         const results = predictBatchJS(enriched);
@@ -76,18 +96,18 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Single prediction
-    if (!validateInput(body)) {
-      return NextResponse.json({ error: "Invalid input" }, { status: 400 });
+    if (body.lat != null && body.lon != null) {
+      const enriched = { ...body, region: body.region || getRegion(body.lat) };
+      try {
+        const result = await callPython(enriched, PREDICTOR_V90);
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
+      } catch {
+        const result = predictJS(enriched);
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86" });
+      }
     }
-    const enriched = { ...body, region: body.region || getRegion(body.lat) };
-    try {
-      const result = await callPython(enriched);
-      return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
-    } catch {
-      const result = predictJS(enriched);
-      return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86" });
-    }
+
+    return NextResponse.json({ error: "Invalid input — need lat/lon or district_id" }, { status: 400 });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }
@@ -95,7 +115,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    model_version: "v9.0 (Python, single) + v8.6 (JS, batch)",
-    note: "Single-cell predictions use v9.0 Python (61 features). Batch (map) uses v8.6 JS (35 features, instant).",
+    model_version: "v9.1 (district) + v9.0 (cell) + v8.6 (JS fallback)",
+    note: "If inputs have district_id → v9.1 (district-level, 74 feats, AUROC=0.93 OOD). Else if lat/lon → v9.0 (cell-level, 61 feats, AUROC=0.92 OOD).",
   });
 }
