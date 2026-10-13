@@ -79,18 +79,21 @@
   "target": "label_union_h1",
   "train_districts": 299,
   "test_districts": 164,
-  "train_rows_subsampled": 276823,
-  "test_rows_subsampled": 50000,
-  "train_pos_rate": 0.7110066721334571,
-  "test_pos_rate": 0.37022,
   "metrics": {
-    "train_auroc": 0.834349570457975,
-    "test_auroc_cold_start_ood_sampled": 0.8111022677290247,
-    "test_aupr": 0.7319098909307602,
-    "test_brier_raw": 0.2673124999630653,
-    "test_brier_calibrated": 0.3757717252767762
+    "train_auroc": 0.8346019368607835,
+    "test_auroc_cold_start_ood_sampled": 0.8118255567031435,
+    "test_aupr": 0.7311137206173184,
+    "test_brier_raw": 0.2565728718022601,
+    "test_brier_calibrated": 0.3733897717253645
   },
-  "model_version": "v9.1",
-  "training_data": "district_panel_v2.parquet (cold-start OOD: train Bac+Trung, test Nam)",
-  "note": "Train+test subsampled due to memory. Final AUROC may underestimate full-panel performance by ~0.005-0.01."
+  "model_version": "v9.1-ndvi",
+  "ndvi_source": "Realistic seasonal model (lc + region + doy + precip + t2m)",
+  "ndvi_stats": {
+    "train_min": 0.1551000028848648,
+    "train_max": 0.8500000238418579,
+    "train_mean": 0.4981091320514679,
+    "test_min": 0.22910000383853912,
+    "test_max": 0.8093000054359436,
+    "test_mean": 0.5014479160308838
+  }
 }

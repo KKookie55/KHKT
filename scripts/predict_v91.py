@@ -31,6 +31,7 @@ FEATURES_PATH = os.path.join(MODEL_DIR, 'features_forest_fire.json')
 FEATURES_ANY_PATH = os.path.join(MODEL_DIR, 'features_any_fire.json')
 DISTRICT_FEATURES_PATH = os.path.join(MODEL_DIR, 'district_features.parquet')
 DISTRICT_CLIM_PATH = os.path.join(MODEL_DIR, 'district_climatology.parquet')
+DISTRICT_NDVI_PATH = os.path.join(MODEL_DIR, 'district_ndvi.parquet')  # NEW
 
 _model = None
 _model_any = None
@@ -40,10 +41,11 @@ _feats_list = None
 _feats_any_list = None
 _district_static = None
 _district_clim = None
+_district_ndvi = None  # NEW
 
 
 def load_resources():
-    global _model, _model_any, _iso, _iso_any, _feats_list, _feats_any_list, _district_static, _district_clim
+    global _model, _model_any, _iso, _iso_any, _feats_list, _feats_any_list, _district_static, _district_clim, _district_ndvi
     if _model is None:
         _model = gbm.Booster()
         _model.load_model(MODEL_PATH)
@@ -62,6 +64,31 @@ def load_resources():
         _district_static = pd.read_parquet(DISTRICT_FEATURES_PATH)
     if _district_clim is None:
         _district_clim = pd.read_parquet(DISTRICT_CLIM_PATH)
+    if _district_ndvi is None:
+        try:
+            _district_ndvi = pd.read_parquet(DISTRICT_NDVI_PATH)
+        except Exception:
+            _district_ndvi = None
+
+
+def get_ndvi(district_id: int, doy: int):
+    """Get NDVI for (district, doy) from pre-built NDVI table."""
+    if _district_ndvi is None:
+        return {"ndvi": 0.4, "ndvi_anom": 0.0, "ndvi_lag7": 0.4}
+    rows = _district_ndvi[(_district_ndvi["district_id"] == district_id) & (_district_ndvi["doy"] == doy)]
+    if len(rows) == 0:
+        # Fallback to nearest doy
+        d_rows = _district_ndvi[_district_ndvi["district_id"] == district_id]
+        if len(d_rows) == 0:
+            return {"ndvi": 0.4, "ndvi_anom": 0.0, "ndvi_lag7": 0.4}
+        d_rows = d_rows.copy()
+        d_rows["d"] = (d_rows["doy"] - doy).abs()
+        rows = d_rows.iloc[[d_rows["d"].idxmin()]]
+    return {
+        "ndvi": float(rows.iloc[0]["ndvi"]),
+        "ndvi_anom": float(rows.iloc[0].get("ndvi_anom", 0.0)),
+        "ndvi_lag7": float(rows.iloc[0].get("ndvi_lag7", rows.iloc[0]["ndvi"])),
+    }
 
 
 def get_district_static(district_id: int):
@@ -107,6 +134,7 @@ def build_features(district_id, doy, temp, humidity, wind, rain, days_since_rain
     clim = get_district_clim(district_id, doy)
     if clim is None:
         return None, "No climatology for district_id=" + str(district_id)
+    ndvi_data = get_ndvi(district_id, doy)  # NEW
 
     t2m_clim = float(clim["t2m_clim"])
     rh_clim = float(clim["rh_clim"])
@@ -193,9 +221,10 @@ def build_features(district_id, doy, temp, humidity, wind, rain, days_since_rain
         'latitude_band': static['latitude_band'],
         'coastal_distance': static['coastal_distance'],
         'population_density_proxy': static['population_density_proxy'],
-        'ndvi': static['ndvi'],
-        'ndvi_anom': static.get('ndvi_anom', 0.0),
-        'ndvi_lag7': static['ndvi_lag7'],
+        # NEW: NDVI from realistic seasonal model
+        'ndvi': ndvi_data['ndvi'],
+        'ndvi_anom': ndvi_data['ndvi_anom'],
+        'ndvi_lag7': ndvi_data['ndvi_lag7'],
         'cell_fire_rate_exp': static['cell_fire_rate_exp'],
         'cell_fire_count_30d': static['cell_fire_count_30d'],
         'is_dry': static['is_dry'],
