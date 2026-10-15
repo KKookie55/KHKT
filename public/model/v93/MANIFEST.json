@@ -1,0 +1,42 @@
+{
+  "model_forest_fire.json": {
+    "path": "/content/KHKT/public/model/v93/model_forest_fire.json",
+    "size": 597638,
+    "md5": "174528907f45a7815d35f87fe80d49f6"
+  },
+  "iso_forest_fire.pkl": {
+    "path": "/content/KHKT/public/model/v93/iso_forest_fire.pkl",
+    "size": 1767,
+    "md5": "e4147038c21f8464f6dc910a6d981155"
+  },
+  "features_forest_fire.json": {
+    "path": "/content/KHKT/public/model/v93/features_forest_fire.json",
+    "size": 1936,
+    "md5": "ba3ab802b942b42a9032752ceaf0ddd2"
+  },
+  "model_any_fire.json": {
+    "path": "/content/KHKT/public/model/v93/model_any_fire.json",
+    "size": 738714,
+    "md5": "549140af0d4d9e4e456d36d50fec466e"
+  },
+  "iso_any_fire.pkl": {
+    "path": "/content/KHKT/public/model/v93/iso_any_fire.pkl",
+    "size": 2207,
+    "md5": "c316c8fc30240ac221c00aeec4593232"
+  },
+  "features_any_fire.json": {
+    "path": "/content/KHKT/public/model/v93/features_any_fire.json",
+    "size": 1934,
+    "md5": "5cbf9fd8452ea3c90df5a8e7c81f590c"
+  },
+  "metrics_summary.json": {
+    "path": "/content/KHKT/public/model/v93/metrics_summary.json",
+    "size": 4287,
+    "md5": "cc1e79d7c438920ce21ca7b3df4361a2"
+  },
+  "district_ndvi_real.parquet": {
+    "path": "/content/KHKT/public/model/v91/district_ndvi_real.parquet",
+    "size": 81756,
+    "md5": "5c603f425e35247257322dc9a2862f84"
+  }
+}
