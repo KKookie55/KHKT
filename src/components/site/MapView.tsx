@@ -440,7 +440,7 @@ export default function MapView() {
         <div className="absolute top-0 left-0 right-0 z-[600] bg-slate-800/90 backdrop-blur text-white text-[10px] text-center py-1 px-2 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
-            Dự báo t+{horizon} cho {forecastDateStr} · {(showDistricts && districtPredictions.size > 0) ? "Model v9.2 HUYỆN" : "Model v9.0 Ô"} ({predMode === "forest" ? "🌲 cháy RỪNG" : "🔥 cháy BẤT KỲ"}) · Open-Meteo · Auto-refresh 10ph
+            Dự báo t+{horizon} cho {forecastDateStr} · {(showDistricts && districtPredictions.size > 0) ? "Model v9.3 HUYỆN" : "Model v9.0 Ô"} ({predMode === "forest" ? "🌲 cháy RỪNG" : "🔥 cháy BẤT KỲ"}) · Open-Meteo · Auto-refresh 10ph
           </span>
           <span className="opacity-75 font-mono text-[9px]">
             {isAutoRefreshing ? 'ĐANG CẬP NHẬT…' : `Lần sau: ${countdownStr}`}
@@ -499,10 +499,10 @@ export default function MapView() {
         <div className="absolute top-8 left-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2 text-[10px]">
           <div className="flex items-center gap-1.5">
             {isPredicting ? <Loader2 className="h-3 w-3 animate-spin text-slate-500" /> : <Cpu className="h-3 w-3 text-slate-600" />}
-            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : (showDistricts && districtPredictions.size > 0 ? "Model v9.2 (Huyện)" : "Model v9.0 (Ô)")}</span>
+            <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : (showDistricts && districtPredictions.size > 0 ? "Model v9.3 (Huyện)" : "Model v9.0 (Ô)")}</span>
           </div>
           <div className="mt-1 text-slate-500">
-            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">{showDistricts && districtPredictions.size > 0 ? "0,933 (v9.2 huyện)" : "0,921 (v9.0 ô)"}</span></div>
+            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">{showDistricts && districtPredictions.size > 0 ? "0,929 (v9.3 huyện)" : "0,921 (v9.0 ô)"}</span></div>
             <div>Dự báo: <span className="font-mono text-slate-700">t+{horizon} ({forecastDateStr})</span></div>
             {lastPredictTime !== null && <div>Latency: <span className="font-mono text-slate-700">{lastPredictTime}ms</span></div>}
             {lastRefreshTime && (
@@ -741,7 +741,7 @@ export default function MapView() {
 
           <div className="p-2 rounded-md bg-slate-100 ring-1 ring-slate-200 text-[10px] text-slate-600 leading-relaxed">
             <Cpu className="inline h-3 w-3 text-slate-500 mr-1" />
-            Model {(showDistricts && districtPredictions.size > 0) ? "v9.2 (Huyện): XGBoost + Isotonic fit on val, 78 features (74 + 5 interactions), AUROC=0,933 OOD South" : "v9.0 (Ô): XGBoost + Isotonic, 61 features, AUROC=0,921 OOD South"}. Multi-task forest fire (high-conf MODIS). Cold-start: train Bắc+Trung, test Nam.
+            Model {(showDistricts && districtPredictions.size > 0) ? "v9.3 (Huyện): XGBoost + Isotonic fit on val, 77 features, full panel + real MODIS NDVI, AUROC=0,929 OOD South" : "v9.0 (Ô): XGBoost + Isotonic, 61 features, AUROC=0,921 OOD South"}. Multi-task forest fire (high-conf MODIS). Cold-start: train Bắc+Trung, test Nam.
           </div>
         </div>
       </div>

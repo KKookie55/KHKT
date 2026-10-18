@@ -23,10 +23,14 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 MODEL_DIR = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v91')
 MODEL_DIR_V92 = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v92')
+MODEL_DIR_V93 = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v93')
 
-# Use v9.2 if available, fall back to v9.1
-USE_DIR = MODEL_DIR_V92 if os.path.exists(os.path.join(MODEL_DIR_V92, 'model_forest_fire.json')) else MODEL_DIR
-MODEL_VERSION_LABEL = 'v9.2' if USE_DIR == MODEL_DIR_V92 else 'v9.1'
+if os.path.exists(os.path.join(MODEL_DIR_V93, 'model_forest_fire.json')):
+    USE_DIR = MODEL_DIR_V93; MODEL_VERSION_LABEL = 'v9.3'
+elif os.path.exists(os.path.join(MODEL_DIR_V92, 'model_forest_fire.json')):
+    USE_DIR = MODEL_DIR_V92; MODEL_VERSION_LABEL = 'v9.2'
+else:
+    USE_DIR = MODEL_DIR; MODEL_VERSION_LABEL = 'v9.1'
 
 MODEL_PATH = os.path.join(USE_DIR, 'model_forest_fire.json')
 MODEL_ANY_PATH = os.path.join(USE_DIR, 'model_any_fire.json')
@@ -36,7 +40,9 @@ FEATURES_PATH = os.path.join(USE_DIR, 'features_forest_fire.json')
 FEATURES_ANY_PATH = os.path.join(USE_DIR, 'features_any_fire.json')
 DISTRICT_FEATURES_PATH = os.path.join(MODEL_DIR, 'district_features.parquet')
 DISTRICT_CLIM_PATH = os.path.join(MODEL_DIR, 'district_climatology.parquet')
+DISTRICT_NDVI_REAL_PATH = os.path.join(MODEL_DIR, 'district_ndvi_real.parquet')
 DISTRICT_NDVI_PATH = os.path.join(MODEL_DIR, 'district_ndvi.parquet')
+DISTRICT_NDVI_PATH = DISTRICT_NDVI_REAL_PATH if os.path.exists(DISTRICT_NDVI_REAL_PATH) else DISTRICT_NDVI_PATH
 DISTRICT_CELL_FIRE_CLIM_PATH = os.path.join(MODEL_DIR, 'district_cell_fire_rate_clim.parquet')  # NEW v9.2
 
 _model = None
@@ -93,9 +99,10 @@ def get_cell_fire_clim(district_id, doy):
         d_rows = _district_cell_fire_clim[_district_cell_fire_clim["district_id"] == district_id]
         if len(d_rows) == 0:
             return {"cell_fire_rate_exp": 0.05, "cell_fire_count_30d": 1.5, "is_dry": 0, "cell_fire_rate_dry_exp": 0.05}
-        d_rows = d_rows.copy()
+        d_rows = d_rows.copy().reset_index(drop=True)
         d_rows["d"] = (d_rows["doy"] - doy).abs()
-        rows = d_rows.iloc[[d_rows["d"].idxmin()]]
+        min_idx = d_rows["d"].idxmin()
+        rows = d_rows.iloc[[min_idx]]
     return {
         "cell_fire_rate_exp": float(rows.iloc[0]["cell_fire_rate_exp"]),
         "cell_fire_count_30d": float(rows.iloc[0]["cell_fire_count_30d"]),
@@ -114,9 +121,10 @@ def get_ndvi(district_id: int, doy: int):
         d_rows = _district_ndvi[_district_ndvi["district_id"] == district_id]
         if len(d_rows) == 0:
             return {"ndvi": 0.4, "ndvi_anom": 0.0, "ndvi_lag7": 0.4}
-        d_rows = d_rows.copy()
+        d_rows = d_rows.copy().reset_index(drop=True)
         d_rows["d"] = (d_rows["doy"] - doy).abs()
-        rows = d_rows.iloc[[d_rows["d"].idxmin()]]
+        min_idx = d_rows["d"].idxmin()
+        rows = d_rows.iloc[[min_idx]]
     return {
         "ndvi": float(rows.iloc[0]["ndvi"]),
         "ndvi_anom": float(rows.iloc[0].get("ndvi_anom", 0.0)),
@@ -153,9 +161,10 @@ def get_district_clim(district_id: int, doy: int):
                 "precip_clim": float(g_rows["precip_clim"].mean()),
                 "wind_clim": float(g_rows["wind_clim"].mean()),
             }
-        d_rows = d_rows.copy()
+        d_rows = d_rows.copy().reset_index(drop=True)
         d_rows["d"] = (d_rows["doy"] - doy).abs()
-        rows = d_rows.iloc[[d_rows["d"].idxmin()]]
+        min_idx = d_rows["d"].idxmin()
+        rows = d_rows.iloc[[min_idx]]
     return rows.iloc[0][["t2m_clim", "rh_clim", "precip_clim", "wind_clim"]].to_dict()
 
 
