@@ -450,7 +450,7 @@ export default function MapView() {
         <MapContainer center={[16.5, 106.5]} zoom={6} className="h-full w-full" scrollWheelZoom={true} maxBounds={[[7.5, 100.5], [24.5, 110.5]]} maxBoundsViscosity={0.9} minZoom={5} maxZoom={12}>
           <TileLayer key={activeBasemap.id} url={activeBasemap.url} attribution={activeBasemap.attribution} subdomains={activeBasemap.subdomains || "abc"} maxZoom={activeBasemap.maxZoom} />
           {showDistricts && districtsGeo && (
-            <GeoJSON key={`districts-${districtAggMode}-${predMode}-${horizon}`} data={districtsGeo} style={districtStyle} />
+            <GeoJSON key={`districts-${districtAggMode}-${predMode}-${horizon}-${lastPredictTime ?? 0}`} data={districtsGeo} style={districtStyle} />
           )}
           {showCells && cellPredictions.map((c) => {
             const dm = cellToDistrict?.[c.id];
