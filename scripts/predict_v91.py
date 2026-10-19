@@ -24,8 +24,11 @@ _PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 MODEL_DIR = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v91')
 MODEL_DIR_V92 = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v92')
 MODEL_DIR_V93 = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v93')
+MODEL_DIR_V94 = os.path.join(_PROJECT_ROOT, 'public', 'model', 'v94')
 
-if os.path.exists(os.path.join(MODEL_DIR_V93, 'model_forest_fire.json')):
+if os.path.exists(os.path.join(MODEL_DIR_V94, 'model_forest_fire.json')):
+    USE_DIR = MODEL_DIR_V94; MODEL_VERSION_LABEL = 'v9.4'
+elif os.path.exists(os.path.join(MODEL_DIR_V93, 'model_forest_fire.json')):
     USE_DIR = MODEL_DIR_V93; MODEL_VERSION_LABEL = 'v9.3'
 elif os.path.exists(os.path.join(MODEL_DIR_V92, 'model_forest_fire.json')):
     USE_DIR = MODEL_DIR_V92; MODEL_VERSION_LABEL = 'v9.2'
@@ -260,6 +263,14 @@ def build_features(district_id, doy, temp, humidity, wind, rain, days_since_rain
     # NDVI anomaly: current NDVI - global mean (fallback; would be per-district mean with real climatology)
     ndvi_anom = ndvi_data['ndvi'] - 0.499
 
+    # NEW v9.4: neighbor_fire (placeholder=0, real-time FIRMS not yet implemented)
+    neighbor_fire = 0.0
+    # NEW v9.4: real landcover (use existing static values as proxy)
+    forest_prop_real = static.get('forest_prop', 0.5)
+    agri_prop_real = static.get('agriculture_prop', 0.3)
+    urban_prop_real = static.get('urban_prop', 0.05)
+    water_prop_real = static.get('water_prop', 0.05)
+
     features = {
         't2m': t2m_today, 'rh': rh_today, 'wind': wind_today, 'precip': precip_today, 'doy': int(doy),
         't2m_lag1': t2m_lag1, 't2m_lag3': t2m_lag3, 't2m_lag7': t2m_lag7, 't2m_lag14': t2m_lag14,
@@ -302,6 +313,11 @@ def build_features(district_id, doy, temp, humidity, wind, rain, days_since_rain
         'dry_wind': dry_wind,
         'heat_drought': heat_drought,
         'ndvi_anom': ndvi_anom,
+        'neighbor_fire': neighbor_fire,  # NEW v9.4
+        'forest_prop_real': forest_prop_real,  # NEW v9.4
+        'agri_prop_real': agri_prop_real,  # NEW v9.4
+        'urban_prop_real': urban_prop_real,  # NEW v9.4
+        'water_prop_real': water_prop_real,  # NEW v9.4
         'cell_fire_rate_exp': cell_fire_clim['cell_fire_rate_exp'],  # NEW v9.2: seasonal climatology
         'cell_fire_count_30d': cell_fire_clim['cell_fire_count_30d'],  # NEW v9.2
         'is_dry': cell_fire_clim['is_dry'],  # NEW v9.2
