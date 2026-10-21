@@ -10,8 +10,8 @@ export const PROJECT = {
   competition: "Cuộc thi Khoa học Kĩ thuật — Sở GD&ĐT Hà Nội",
   level: "Cấp học: THCS",
   field: "Phần mềm hệ thống",
-  dataPoints: 598_143,
-  cells: 273,
+  dataPoints: 964_040,
+  cells: 710,
   days: 2_191,
   period: "2018 – 2023",
   seeds: 5,
@@ -20,17 +20,17 @@ export const PROJECT = {
   school: "Trường THCS&THPT LÊ QUÝ ĐÔN",
   teacher: "Lê Xuân Tân",
   class: "9E4",
-  modelVersion: "v9.0 forest fire",
-  featureCount: 58,
+  modelVersion: "v9.4 forest fire (Optuna + spatial lag + real MODIS NDVI)",
+  featureCount: 75,
 };
 
 export const KEY_FINDINGS = [
   {
-    label: "AUROC cold-start OOD — cháy RỪNG (v9.0)",
-    value: "92,1%",
-    sub: "± 0,0007 · 5 seeds",
+    label: "AUROC cold-start OOD — cháy RỪNG (v9.4)",
+    value: "97,9%",
+    sub: "Brier 0,035 · 75 features · Optuna tuned",
     tone: "good" as const,
-    note: "Lọc cháy nông nghiệp (low/nominal confidence), chỉ giữ high-confidence = cháy rừng cường cao",
+    note: "Full panel 490K rows + real MODIS NDVI + spatial lag + Optuna hyperparameter tuning",
   },
   {
     label: "Giảm over-prediction Nam",

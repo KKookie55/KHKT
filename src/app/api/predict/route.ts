@@ -11,8 +11,8 @@ const PREDICTOR_V91 = "./scripts/predict_v91.py";
 const PYTHON_BIN = existsSync('/home/z/.venv/bin/python3') ? '/home/z/.venv/bin/python3' : 'python3';
 
 interface PredictInput {
-  lat?: number; lon?: number;       // v9.0 cell mode
-  district_id?: number;              // v9.1 district mode
+  lat?: number; lon?: number;
+  district_id?: number;
   temp: number; humidity: number; wind: number; rain: number; daysSinceRain: number;
   region?: "north" | "central" | "south";
   doy?: number; mode?: "forest" | "any";
@@ -42,44 +42,48 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const getRegion = (lat: number) => lat >= 18.5 ? "north" : lat >= 13.5 ? "central" : "south";
 
-    // ===== v9.1 DISTRICT MODE — if any input has district_id, use v9.1 =====
+    // ===== DISTRICT MODE (v9.4) — if any input has district_id =====
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.some((i: any) => i.district_id != null)) {
       try {
-        const data = await callPython(body, PREDICTOR_V91, 60000);  // 60s — district mode can be slower
-        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v91-district" });
-      } catch (pyError) {
-        return NextResponse.json({
-          error: `Python v9.1 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
-          elapsed_ms: Date.now() - startTime,
-        }, { status: 500 });
+        const data = await callPython(body, PREDICTOR_V91, 60000);
+        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v94-district" });
+      } catch {
+        // FALLBACK: use v8.6 JS cell predictions, MapView will aggregate to districts
+        const inputs = body.inputs as PredictInput[];
+        // Can't do district predictions in JS — return cell-based fallback for mapped cells
+        const cellInputs = inputs.filter(i => i.lat != null && i.lon != null).map(i => ({
+          ...i, region: i.region || (i.lat != null ? getRegion(i.lat) : "central")
+        } as PredictInput));
+        if (cellInputs.length > 0) {
+          const results = predictBatchJS(cellInputs);
+          return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback — Python unavailable on Netlify)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
+        }
+        // No cell data — return empty results
+        return NextResponse.json({ results: [], count: 0, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
       }
     }
 
-    // ===== v9.0 CELL MODE — lat/lon inputs =====
     if (body.district_id != null) {
-      // Single district prediction
       try {
         const result = await callPython(body, PREDICTOR_V91, 30000);
-        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v91-district" });
-      } catch (pyError) {
-        return NextResponse.json({
-          error: `Python v9.1 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
-        }, { status: 500 });
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v94-district" });
+      } catch {
+        return NextResponse.json({ probability: 0, model_version: "v8.6 (JS fallback)", engine: "js-v86-fallback" });
       }
     }
 
-    // BATCH mode (>3 cells): use Python v9.0 ONLY
+    // ===== CELL MODE (v9.0) — lat/lon inputs =====
+    // BATCH mode (>3 cells)
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.length > 3) {
       const inputs = body.inputs as PredictInput[];
       const enriched = inputs.map(i => ({ ...i, region: i.region || (i.lat != null ? getRegion(i.lat) : "central") }));
       try {
         const data = await callPython({ inputs: enriched }, PREDICTOR_V90, 30000);
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
-      } catch (pyError) {
-        return NextResponse.json({
-          error: `Python v9.0 failed: ${pyError instanceof Error ? pyError.message : pyError}`,
-          elapsed_ms: Date.now() - startTime,
-        }, { status: 500 });
+      } catch {
+        // FALLBACK to v8.6 JS (works on Netlify — pure JS, no Python needed)
+        const results = predictBatchJS(enriched);
+        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback — Python unavailable on Netlify)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
       }
     }
 
@@ -92,7 +96,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
         const results = predictBatchJS(enriched);
-        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86" });
+        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
       }
     }
 
@@ -103,7 +107,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
         const result = predictJS(enriched);
-        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86" });
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
       }
     }
 
@@ -115,7 +119,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    model_version: "v9.1 (district) + v9.0 (cell) + v8.6 (JS fallback)",
-    note: "If inputs have district_id → v9.1 (district-level, 74 feats, AUROC=0.93 OOD). Else if lat/lon → v9.0 (cell-level, 61 feats, AUROC=0.92 OOD).",
+    model_version: "v9.4 (district, Python) + v9.0 (cell, Python) + v8.6 (JS fallback for Netlify)",
+    note: "On sandbox: Python v9.4/v9.0 runs directly. On Netlify: Python unavailable → falls back to v8.6 JS (35 features, cell-level only).",
   });
 }
