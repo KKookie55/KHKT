@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { predictBatchJS, predictJS } from "@/lib/predict-js";
+import { predictBatchV94JS } from "@/lib/predict-v94-js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,36 +45,28 @@ export async function POST(request: NextRequest) {
 
     // ===== DISTRICT MODE (v9.4) — if any input has district_id =====
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.some((i: any) => i.district_id != null)) {
+      // Try Python first (sandbox), fall back to v9.4 JS (Netlify)
       try {
         const data = await callPython(body, PREDICTOR_V91, 60000);
-        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v94-district" });
+        return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v94" });
       } catch {
-        // FALLBACK: use v8.6 JS cell predictions, MapView will aggregate to districts
-        const inputs = body.inputs as PredictInput[];
-        // Can't do district predictions in JS — return cell-based fallback for mapped cells
-        const cellInputs = inputs.filter(i => i.lat != null && i.lon != null).map(i => ({
-          ...i, region: i.region || (i.lat != null ? getRegion(i.lat) : "central")
-        } as PredictInput));
-        if (cellInputs.length > 0) {
-          const results = predictBatchJS(cellInputs);
-          return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback — Python unavailable on Netlify)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
-        }
-        // No cell data — return empty results
-        return NextResponse.json({ results: [], count: 0, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
+        // v9.4 JS fallback — works on Netlify (no Python needed)
+        const results = predictBatchV94JS(body.inputs);
+        return NextResponse.json({ results, count: results.length, model_version: "v9.4 JS (75 features, Optuna)", elapsed_ms: Date.now() - startTime, engine: "js-v94" });
       }
     }
 
     if (body.district_id != null) {
       try {
         const result = await callPython(body, PREDICTOR_V91, 30000);
-        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v94-district" });
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v94" });
       } catch {
-        return NextResponse.json({ probability: 0, model_version: "v8.6 (JS fallback)", engine: "js-v86-fallback" });
+        const results = predictBatchV94JS([body]);
+        return NextResponse.json({ ...results[0], elapsed_ms: Date.now() - startTime, engine: "js-v94" });
       }
     }
 
     // ===== CELL MODE (v9.0) — lat/lon inputs =====
-    // BATCH mode (>3 cells)
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.length > 3) {
       const inputs = body.inputs as PredictInput[];
       const enriched = inputs.map(i => ({ ...i, region: i.region || (i.lat != null ? getRegion(i.lat) : "central") }));
@@ -81,13 +74,11 @@ export async function POST(request: NextRequest) {
         const data = await callPython({ inputs: enriched }, PREDICTOR_V90, 30000);
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
-        // FALLBACK to v8.6 JS (works on Netlify — pure JS, no Python needed)
         const results = predictBatchJS(enriched);
-        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback — Python unavailable on Netlify)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
+        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86" });
       }
     }
 
-    // SMALL batch / single cell
     if (body.inputs && Array.isArray(body.inputs)) {
       const inputs = body.inputs as PredictInput[];
       const enriched = inputs.map(i => ({ ...i, region: i.region || (i.lat != null ? getRegion(i.lat!) : "central") }));
@@ -96,7 +87,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
         const results = predictBatchJS(enriched);
-        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
+        return NextResponse.json({ results, count: results.length, model_version: "v8.6 (JS fallback)", elapsed_ms: Date.now() - startTime, engine: "js-v86" });
       }
     }
 
@@ -107,7 +98,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v90" });
       } catch {
         const result = predictJS(enriched);
-        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86-fallback" });
+        return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "js-v86" });
       }
     }
 
@@ -119,7 +110,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    model_version: "v9.4 (district, Python) + v9.0 (cell, Python) + v8.6 (JS fallback for Netlify)",
-    note: "On sandbox: Python v9.4/v9.0 runs directly. On Netlify: Python unavailable → falls back to v8.6 JS (35 features, cell-level only).",
+    model_version: "v9.4 JS (district, 75 features) + v9.0 Python (cell) + v8.6 JS (cell fallback)",
+    note: "District mode: v9.4 JS runs on Netlify (no Python needed). Cell mode: v8.6 JS fallback.",
   });
 }
