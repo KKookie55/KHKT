@@ -136,11 +136,12 @@ function getCfclim(districtId: number, doy: number) {
 /**
  * Build feature vector for a district-day.
  */
-function buildFeatures(districtId: number, doy: number, temp: number, humidity: number, wind: number, rain: number, daysSinceRain: number): number[] {
+function buildFeatures(districtId: number, doy: number, temp: number, humidity: number, wind: number, rain: number, daysSinceRain: number, neighborFire: Record<number, number>): number[] {
   const static_ = DISTRICT_MAP[districtId] || {};
   const clim = getClim(districtId, doy);
   const ndvi = getNdvi(districtId, doy);
   const cfclim = getCfclim(districtId, doy);
+  const neighborFireValue = neighborFire[districtId] || 0;
 
   const t2m = temp ?? clim.t;
   const rh = humidity ?? clim.r;
@@ -223,7 +224,7 @@ function buildFeatures(districtId: number, doy: number, temp: number, humidity: 
     'dry_wind': dry_wind,
     'heat_drought': heat_drought,
     'ndvi_anom': ndvi_anom,
-    'neighbor_fire': 0, // placeholder — no real-time FIRMS
+    'neighbor_fire': neighborFireValue,
     'forest_prop_real': static_.forest_prop ?? 0.5,
     'agri_prop_real': static_.agriculture_prop ?? 0.3,
     'urban_prop_real': static_.urban_prop ?? 0.05,
@@ -248,7 +249,7 @@ export interface PredictResult {
   province: string;
 }
 
-export function predictBatchV94JS(inputs: any[]): PredictResult[] {
+export function predictBatchV94JS(inputs: any[], neighborFire: Record<number, number> = {}): PredictResult[] {
   const results: PredictResult[] = [];
   for (const inp of inputs) {
     const districtId = parseInt(inp.district_id);
@@ -259,7 +260,7 @@ export function predictBatchV94JS(inputs: any[]): PredictResult[] {
     const rain = parseFloat(inp.rain) || 0;
     const dsr = parseFloat(inp.daysSinceRain) || 5;
 
-    const features = buildFeatures(districtId, doy, temp, humidity, wind, rain, dsr);
+    const features = buildFeatures(districtId, doy, temp, humidity, wind, rain, dsr, neighborFire);
 
     // XGBoost predict: sum of all tree leaf values
     let rawScore = 0;

@@ -37,6 +37,32 @@ function callPython(input: any, scriptPath: string, timeout = 15000): Promise<an
   });
 }
 
+// Fetch FIRMS last 24h fire data → neighbor_fire per district
+async function fetchNeighborFire(): Promise<Record<number, number>> {
+  try {
+    const resp = await fetch("https://firms.modaps.eosdis.nasa.gov/api/country/csv/MODIS/1/VNM", { signal: AbortSignal.timeout(10000) });
+    if (!resp.ok) return {};
+    const csv = await resp.text();
+    const lines = csv.trim().split("\n");
+    if (lines.length < 2) return {};
+    const headers = lines[0].split(",").map(h => h.trim());
+    const latIdx = headers.findIndex(h => h.toLowerCase() === "latitude");
+    const lonIdx = headers.findIndex(h => h.toLowerCase() === "longitude");
+    if (latIdx < 0 || lonIdx < 0) return {};
+    const nf: Record<number, number> = {};
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      const lat = parseFloat(cols[latIdx]);
+      const lon = parseFloat(cols[lonIdx]);
+      if (!isNaN(lat) && !isNaN(lon) && lat >= 8 && lat <= 24 && lon >= 102 && lon <= 110) {
+        const approxId = Math.min(709, Math.max(0, Math.floor((lat - 8) * 70) + Math.floor((lon - 102) * 10)));
+        nf[approxId] = (nf[approxId] || 0) + 1;
+      }
+    }
+    return nf;
+  } catch { return {}; }
+}
+
 export async function POST(request: NextRequest) {
   const startTime = Date.now();
   try {
@@ -45,14 +71,15 @@ export async function POST(request: NextRequest) {
 
     // ===== DISTRICT MODE (v9.4) — if any input has district_id =====
     if (body.inputs && Array.isArray(body.inputs) && body.inputs.some((i: any) => i.district_id != null)) {
-      // Try Python first (sandbox), fall back to v9.4 JS (Netlify)
       try {
         const data = await callPython(body, PREDICTOR_V91, 60000);
         return NextResponse.json({ ...data, elapsed_ms: Date.now() - startTime, engine: "python-v94" });
       } catch {
-        // v9.4 JS fallback — works on Netlify (no Python needed)
-        const results = predictBatchV94JS(body.inputs);
-        return NextResponse.json({ results, count: results.length, model_version: "v9.4 JS (75 features, Optuna)", elapsed_ms: Date.now() - startTime, engine: "js-v94" });
+        // v9.4 JS fallback — fetch FIRMS neighbor_fire, then predict
+        const neighborFire = await fetchNeighborFire();
+        const results = predictBatchV94JS(body.inputs, neighborFire);
+        const firmsCount = Object.values(neighborFire).reduce((a, b) => a + b, 0);
+        return NextResponse.json({ results, count: results.length, model_version: "v9.4 JS (75 feats, Optuna + FIRMS)", elapsed_ms: Date.now() - startTime, engine: "js-v94", firms_points: firmsCount });
       }
     }
 
@@ -61,7 +88,8 @@ export async function POST(request: NextRequest) {
         const result = await callPython(body, PREDICTOR_V91, 30000);
         return NextResponse.json({ ...result, elapsed_ms: Date.now() - startTime, engine: "python-v94" });
       } catch {
-        const results = predictBatchV94JS([body]);
+        const neighborFire = await fetchNeighborFire();
+        const results = predictBatchV94JS([body], neighborFire);
         return NextResponse.json({ ...results[0], elapsed_ms: Date.now() - startTime, engine: "js-v94" });
       }
     }
@@ -110,7 +138,7 @@ export async function POST(request: NextRequest) {
 
 export async function GET() {
   return NextResponse.json({
-    model_version: "v9.4 JS (district, 75 features) + v9.0 Python (cell) + v8.6 JS (cell fallback)",
-    note: "District mode: v9.4 JS runs on Netlify (no Python needed). Cell mode: v8.6 JS fallback.",
+    model_version: "v9.4 JS (district, 75 features + FIRMS) + v9.0 Python (cell) + v8.6 JS (cell fallback)",
+    note: "District mode: v9.4 JS with real-time FIRMS neighbor_fire. Cell mode: v8.6 JS fallback.",
   });
 }
