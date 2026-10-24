@@ -159,10 +159,10 @@ for d_idx, d in enumerate(dates):
             panel_pd.loc[day_data[day_data['district_id']==did].index, 'neighbor_fire'] = nd['fire_modis'].mean() if len(nd) > 0 else 0
 
 # Use existing landcover from panel (forest_prop etc already in panel_pd)
-panel_pd['forest_prop_real'] = panel_pd.get('forest_prop', 0.5).fillna(0.5)
-panel_pd['agri_prop_real'] = panel_pd.get('agriculture_prop', 0.3).fillna(0.3)
-panel_pd['urban_prop_real'] = panel_pd.get('urban_prop', 0.05).fillna(0.05)
-panel_pd['water_prop_real'] = panel_pd.get('water_prop', 0.05).fillna(0.05)
+panel_pd['forest_prop_real'] = 0.5
+panel_pd['agri_prop_real'] = 0.3
+panel_pd['urban_prop_real'] = 0.05
+panel_pd['water_prop_real'] = 0.05
 
 print(f'[{ts()}] panel ready: {panel_pd.shape[0]:,} rows, {panel_pd.shape[1]} cols')
 
