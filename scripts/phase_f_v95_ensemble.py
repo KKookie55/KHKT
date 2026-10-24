@@ -84,7 +84,7 @@ print(f'[{ts()}] loading panel...')
 POST_LOAD = {'wind_temp','humidity_temp','dry_wind','heat_drought','ndvi_anom',
              'ndvi','neighbor_fire','forest_prop_real','agri_prop_real',
              'urban_prop_real','water_prop_real'}
-needed = ['district_id','date','is_south_ood'] + [f for f in FEATURES if f not in POST_LOAD] + list(TARGETS.values())
+needed = ['district_id','date','is_south_ood','fire_modis'] + [f for f in FEATURES if f not in POST_LOAD] + list(TARGETS.values())
 panel = pl.read_parquet('download/production/district_panel_v2.parquet', columns=needed)
 cast = {c: pl.Float32 for c in panel.columns if panel[c].dtype == pl.Float64}
 panel = panel.with_columns([pl.col(c).cast(t).alias(c) for c, t in cast.items()])
