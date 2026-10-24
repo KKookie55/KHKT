@@ -8,10 +8,10 @@ import {
 import { Label } from "@/components/ui/label";
 import {
   MapPin, Thermometer, CloudRain, Wind, Activity,
-  AlertTriangle, Layers, Gauge, Map as MapIcon, X, Loader2, Cpu, Clock, History,
+  AlertTriangle, Layers, Gauge, Map as MapIcon, X, Loader2, Cpu, Clock, History, Download, TrendingUp,
 } from "lucide-react";
 import {
-  VIETNAM_GRID, VIETNAM_CITIES, SCENARIOS,
+  VIETNAM_GRID, SCENARIOS,
   type FireCell,
 } from "@/lib/data";
 import { cellColor, cellOpacity } from "@/lib/predict";
@@ -45,18 +45,8 @@ const RISK_LEGEND = [
 ];
 
 interface PredictionHistory {
-  timestamp: string;
-  horizon: number;
-  temp: number;
-  humidity: number;
-  wind: number;
-  rain: number;
-  daysSinceRain: number;
-  region: string;
-  avgProbability: number;
-  highRiskCount: number;
-  source: string;
-  forecastDate: string;
+  timestamp: string; horizon: number; temp: number; humidity: number; wind: number; rain: number; daysSinceRain: number;
+  region: string; avgProbability: number; highRiskCount: number; source: string; forecastDate: string;
 }
 
 export default function MapView() {
@@ -66,7 +56,6 @@ export default function MapView() {
   const [rain, setRain] = useState(0);
   const [daysSinceRain, setDaysSinceRain] = useState(8);
   const [showCells, setShowCells] = useState(true);
-  const [showCities, setShowCities] = useState(true);
   const [selectedCell, setSelectedCell] = useState<FireCell | null>(null);
   const [basemapId, setBasemapId] = useState<BasemapId>("osm");
   const [horizon, setHorizon] = useState(1);
@@ -80,23 +69,24 @@ export default function MapView() {
   const [history, setHistory] = useState<PredictionHistory[]>([]);
   const [weatherCoord, setWeatherCoord] = useState<{ lat: number; lon: number } | null>(null);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
-  const [nextRefreshIn, setNextRefreshIn] = useState<number>(600); // seconds
+  const [nextRefreshIn, setNextRefreshIn] = useState<number>(600);
   const [isAutoRefreshing, setIsAutoRefreshing] = useState(false);
   const [predMode, setPredMode] = useState<"forest" | "any">("forest");
-  const [showDistricts, setShowDistricts] = useState(false);
+  const [showDistricts, setShowDistricts] = useState(true);
   const [districtAggMode, setDistrictAggMode] = useState<"avg" | "max">("max");
   const [districtsGeo, setDistrictsGeo] = useState<any>(null);
   const [cellToDistrict, setCellToDistrict] = useState<Record<number, any> | null>(null);
   const [districtPredictions, setDistrictPredictions] = useState<Map<number, any>>(new Map());
-  const REFRESH_INTERVAL = 600; // 10 minutes in seconds
+  const [selectedDistrict, setSelectedDistrict] = useState<number | null>(null);
+  const REFRESH_INTERVAL = 600;
 
   const activeBasemap = BASEMAPS.find(b => b.id === basemapId) ?? BASEMAPS[0];
-
-  // Compute forecast date based on horizon
   const today = new Date();
   const forecastDate = new Date(today);
   forecastDate.setDate(today.getDate() + horizon);
   const forecastDateStr = forecastDate.toISOString().slice(0, 10);
+
+  const countdownStr = `${Math.floor(nextRefreshIn / 60)}:${String(nextRefreshIn % 60).padStart(2, '0')}`;
 
   const fetchRealWeather = useCallback(async (lat: number, lon: number) => {
     setIsFetchingWeather(true);
@@ -106,11 +96,8 @@ export default function MapView() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       if (data.error) throw new Error(data.error);
-      setTemp(data.temp);
-      setHumidity(data.humidity);
-      setWind(data.wind);
-      setRain(data.rain);
-      setDaysSinceRain(data.daysSinceRain);
+      setTemp(data.temp); setHumidity(data.humidity); setWind(data.wind);
+      setRain(data.rain); setDaysSinceRain(data.daysSinceRain);
       setWeatherDate(data.date);
       setWeatherSource(`Open-Meteo · ${data.date}`);
       setForecastData(data.forecast || []);
@@ -122,6 +109,18 @@ export default function MapView() {
     }
   }, []);
 
+  // Update weather when horizon changes
+  useEffect(() => {
+    if (forecastData.length > 0 && horizon <= forecastData.length) {
+      const day = forecastData[horizon - 1];
+      if (day) {
+        setTemp(Math.round(((day.temp_max + day.temp_min) / 2) * 10) / 10);
+        setRain(Math.round(day.rain * 10) / 10);
+        setWind(Math.round((day.wind / 3.6) * 10) / 10);
+      }
+    }
+  }, [horizon, forecastData]);
+
   const cellPredictions = useMemo(() => {
     return VIETNAM_GRID.map(cell => {
       const pred = modelPredictions.get(cell.id);
@@ -132,49 +131,46 @@ export default function MapView() {
   }, [modelPredictions]);
 
   const stats = useMemo(() => {
-    // In v9.1 district mode, compute stats from district predictions
     if (districtPredictions && districtPredictions.size > 0) {
       const dp = Array.from(districtPredictions.values()).filter(r => !r.error);
       const total = dp.length;
-      const high = dp.filter(r => r.probability >= 0.5).length;
+      const high = dp.filter(r => r.probability >= 0.05).length;
       const avg = dp.reduce((s, r) => s + r.probability, 0) / Math.max(total, 1);
       return { total, high, avg };
     }
     const total = cellPredictions.length;
-    const high = cellPredictions.filter(c => c.probability >= 0.5).length;
+    const high = cellPredictions.filter(c => c.probability >= 0.05).length;
     const avg = cellPredictions.reduce((s, c) => s + c.probability, 0) / Math.max(total, 1);
     return { total, high, avg };
   }, [cellPredictions, districtPredictions]);
+
+  // Top 10 highest-risk districts
+  const topDistricts = useMemo(() => {
+    if (!districtPredictions || districtPredictions.size === 0) return [];
+    return Array.from(districtPredictions.values())
+      .filter(r => !r.error)
+      .sort((a, b) => b.probability - a.probability)
+      .slice(0, 10);
+  }, [districtPredictions]);
 
   const fetchPredictions = useCallback(async () => {
     setIsPredicting(true);
     const startTime = Date.now();
     try {
-      // District mode (v9.1): if districts toggle on, send ALL 710 district_ids
-      // (predict_v91.py handles fallback for districts without explicit cell mapping)
       const ALL_DISTRICT_IDS = Array.from({ length: 710 }, (_, i) => i);
-      const useV91 = showDistricts;  // when district overlay on, use v9.1 for all 710 districts
-
+      const useV91 = showDistricts;
       let inputs: any[];
       if (useV91) {
-        // V9.1 DISTRICT mode — predictions for ALL 710 districts (v9.1 has fallback for missing features)
         inputs = ALL_DISTRICT_IDS.map(did => ({
-          district_id: did,
-          temp, humidity, wind, rain, daysSinceRain,
-          mode: predMode,
+          district_id: did, temp, humidity, wind, rain, daysSinceRain, mode: predMode,
         }));
       } else {
-        // V9.0 CELL mode — predictions per cell
         inputs = VIETNAM_GRID.map(cell => ({
-          lat: cell.lat,
-          lon: cell.lon,
-          temp, humidity, wind, rain, daysSinceRain,
-          mode: predMode,
+          lat: cell.lat, lon: cell.lon, temp, humidity, wind, rain, daysSinceRain, mode: predMode,
         }));
       }
       const response = await fetch('/api/predict', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ inputs }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -182,13 +178,9 @@ export default function MapView() {
       const results = data.results as any[];
 
       if (useV91) {
-        // V9.1: results are per-district; store in districtPredictions map
         const dpredMap = new Map<number, any>();
-        results.forEach(r => {
-          if (r && r.district_id != null) dpredMap.set(r.district_id, r);
-        });
+        results.forEach(r => { if (r && r.district_id != null) dpredMap.set(r.district_id, r); });
         setDistrictPredictions(dpredMap);
-        // ALSO populate cell-level predictions from district (so cell popups show district p)
         const cpredMap = new Map<number, any>();
         VIETNAM_GRID.forEach(cell => {
           const m = cellToDistrict?.[cell.id];
@@ -199,7 +191,6 @@ export default function MapView() {
         });
         setModelPredictions(cpredMap);
       } else {
-        // V9.0: results are per-cell, store directly
         const predMap = new Map<number, any>();
         VIETNAM_GRID.forEach((cell, i) => {
           const pred = results[i];
@@ -207,33 +198,22 @@ export default function MapView() {
           predMap.set(cell.id, pred);
         });
         setModelPredictions(predMap);
-        setDistrictPredictions(new Map()); // clear
+        setDistrictPredictions(new Map());
       }
       setLastPredictTime(Date.now() - startTime);
 
-      // Add to history
       const now = new Date();
       setHistory(prev => [{
-        timestamp: now.toLocaleTimeString("vi-VN"),
-        horizon,
+        timestamp: now.toLocaleTimeString("vi-VN"), horizon,
         temp, humidity, wind, rain, daysSinceRain,
-        region: "all",
-        avgProbability: stats.avg,
-        highRiskCount: stats.high,
-        source: weatherSource,
-        forecastDate: forecastDateStr,
+        region: "all", avgProbability: stats.avg, highRiskCount: stats.high,
+        source: weatherSource, forecastDate: forecastDateStr,
       }, ...prev].slice(0, 10));
     } catch (err) {
       console.warn('Predict failed:', err);
-      // Show ERROR state — do NOT use fake baseRisk values
       const predMap = new Map<number, any>();
       VIETNAM_GRID.forEach(cell => {
-        predMap.set(cell.id, {
-          probability: 0,
-          risk_level: "Lỗi",
-          risk_color: "#94a3b8",
-          error: true,
-        });
+        predMap.set(cell.id, { probability: 0, risk_level: "Lỗi", risk_color: "#94a3b8", error: true });
       });
       setModelPredictions(predMap);
       setLastPredictTime(Date.now() - startTime);
@@ -247,12 +227,9 @@ export default function MapView() {
     return () => clearTimeout(timer);
   }, [fetchPredictions]);
 
-  // Auto-fetch weather on mount
-  useEffect(() => {
-    fetchRealWeather(16.5, 106.5);
-  }, [fetchRealWeather]);
+  useEffect(() => { fetchRealWeather(16.5, 106.5); }, [fetchRealWeather]);
 
-  // ===== Lazy-load district GeoJSON + cell→district lookup when toggle on =====
+  // Lazy-load district GeoJSON + cell→district lookup
   useEffect(() => {
     if (!showDistricts || districtsGeo) return;
     let cancelled = false;
@@ -265,10 +242,7 @@ export default function MapView() {
         if (!geoResp.ok || !lookupResp.ok) throw new Error("HTTP err");
         const geo = await geoResp.json();
         const lookup = await lookupResp.json() as Record<number, any>;
-        if (!cancelled) {
-          setDistrictsGeo(geo);
-          setCellToDistrict(lookup);
-        }
+        if (!cancelled) { setDistrictsGeo(geo); setCellToDistrict(lookup); }
       } catch (e) {
         console.error("District data fetch failed:", e);
       }
@@ -276,11 +250,9 @@ export default function MapView() {
     return () => { cancelled = true; };
   }, [showDistricts, districtsGeo]);
 
-  // ===== Aggregate cell predictions → district stats (used as fallback when v9.1 not loaded) =====
+  // District stats + style
   const districtStats = useMemo(() => {
     if (!cellToDistrict || !districtsGeo) return null;
-
-    // PRIMARY: if v9.1 district predictions exist, use them directly
     if (districtPredictions && districtPredictions.size > 0) {
       const result = new Map<number, { p: number; color: string; label: string; cellCount: number }>();
       districtPredictions.forEach((pred, did) => {
@@ -295,69 +267,85 @@ export default function MapView() {
         const name = d?.properties?.name ?? pred.district_name ?? "?";
         const prov = d?.properties?.province ?? pred.province ?? "?";
         const type = d?.properties?.type ?? "";
-        result.set(did, {
-          p,
-          color,
-          label: `${type} ${name}, ${prov}`,
-          cellCount: 0, // not tracked in v9.1 mode
-        });
+        result.set(did, { p, color, label: `${type} ${name}, ${prov}`, cellCount: 0 });
       });
       return result;
     }
-
-    // FALLBACK: aggregate cell predictions → district (v9.0 mode)
     const byDistrict = new Map<number, { probs: number[]; cells: number[] }>();
     cellPredictions.forEach(c => {
       const m = cellToDistrict[c.id];
       if (!m || m.district_id == null) return;
       const d = byDistrict.get(m.district_id) ?? { probs: [], cells: [] };
-      d.probs.push(c.probability);
-      d.cells.push(c.id);
+      d.probs.push(c.probability); d.cells.push(c.id);
       byDistrict.set(m.district_id, d);
     });
     const result = new Map<number, { p: number; color: string; label: string; cellCount: number }>();
     byDistrict.forEach((v, did) => {
       const p = districtAggMode === "max" ? Math.max(...v.probs) : v.probs.reduce((s, x) => s + x, 0) / v.probs.length;
       let color = "#22c55e";
-      if (p >= 0.7)      color = "#991b1b";
-      else if (p >= 0.5) color = "#dc2626";
-      else if (p >= 0.3) color = "#f59e0b";
-      else if (p >= 0.15) color = "#84cc16";
+      if (p >= 0.20)      color = "#4c1d95";
+      else if (p >= 0.10) color = "#7f1d1d";
+      else if (p >= 0.05) color = "#dc2626";
+      else if (p >= 0.02) color = "#f59e0b";
+      else if (p >= 0.005) color = "#84cc16";
       const d = districtsGeo.features[did];
       const name = d?.properties?.name ?? "?";
       const prov = d?.properties?.province ?? "?";
       const type = d?.properties?.type ?? "";
-      result.set(did, {
-        p,
-        color,
-        label: `${type} ${name}, ${prov}`,
-        cellCount: v.probs.length,
-      });
+      result.set(did, { p, color, label: `${type} ${name}, ${prov}`, cellCount: v.probs.length });
     });
     return result;
   }, [cellToDistrict, districtsGeo, cellPredictions, districtAggMode, districtPredictions]);
 
-  // Style function for GeoJSON districts (interactive:false so clicks pass through to cells)
   const districtStyle = useCallback((feature: any) => {
     const did = feature?.properties?.id;
     const s = districtStats?.get(did);
-    if (!s) return { color: "#94a3b8", weight: 0.5, fillColor: "#cbd5e1", fillOpacity: 0.3, interactive: false };
-    return {
-      color: "#475569",
-      weight: 0.6,
-      fillColor: s.color,
-      fillOpacity: 0.5,
-      interactive: false,
-    } as any;
-  }, [districtStats]);
+    if (selectedDistrict === did) {
+      return { color: "#0f172a", weight: 2.5, fillColor: s?.color || "#cbd5e1", fillOpacity: 0.7, interactive: true };
+    }
+    if (!s) return { color: "#94a3b8", weight: 0.5, fillColor: "#cbd5e1", fillOpacity: 0.3, interactive: true };
+    return { color: "#475569", weight: 0.6, fillColor: s.color, fillOpacity: 0.5, interactive: true } as any;
+  }, [districtStats, selectedDistrict]);
 
-  // ===== Auto-refresh every 10 minutes (pauses when tab hidden) =====
+  const onEachDistrict = useCallback((feature: any, layer: any) => {
+    const did = feature?.properties?.id;
+    const s = districtStats?.get(did);
+    if (!s) return;
+    layer.bindPopup(`
+      <div style="font-size: 11px; min-width: 200px;">
+        <div style="font-weight: bold; color: #0f172a; margin-bottom: 4px; font-size: 12px;">
+          ${feature.properties?.type || ''} ${feature.properties?.name || '?'}
+        </div>
+        <div style="color: #64748b; margin-bottom: 6px;">
+          ${feature.properties?.province || '?'} · ID: ${did}
+        </div>
+        <table style="width: 100%; font-size: 10px; border-collapse: collapse;">
+          <tr><td style="color: #94a3b8; padding: 2px 0;">P(cháy) t+${horizon}:</td><td style="font-weight: bold; color: ${s.color}; text-align: right;">${(s.p * 100).toFixed(2)}%</td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Mức nguy cơ:</td><td style="font-weight: 600; color: ${s.color}; text-align: right;">
+            ${s.p >= 0.20 ? 'Nguy hiểm' : s.p >= 0.10 ? 'Rất cao' : s.p >= 0.05 ? 'Cao' : s.p >= 0.02 ? 'TB' : s.p >= 0.005 ? 'Thấp-TB' : 'Thấp'}
+          </td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Dự báo cho:</td><td style="text-align: right;">${forecastDateStr}</td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Model:</td><td style="text-align: right;">v9.4 (75 features)</td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Thời tiết:</td><td style="text-align: right;">${temp}°C · ${humidity}% · ${wind}m/s · ${rain}mm</td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Số ngày khô:</td><td style="text-align: right;">${daysSinceRain} ngày</td></tr>
+          <tr><td style="color: #94a3b8; padding: 2px 0;">Chế độ:</td><td style="text-align: right;">${predMode === 'forest' ? '🌲 Cháy rừng' : '🔥 Cháy bất kỳ'}</td></tr>
+        </table>
+      </div>
+    `);
+    layer.on('click', () => {
+      setSelectedDistrict(did);
+      const static_ = districtsGeo?.features?.[did]?.properties;
+      if (static_) {
+        fetchRealWeather(static_.centroid_lat || 16.5, static_.centroid_lon || 106.5);
+      }
+    });
+  }, [districtStats, horizon, forecastDateStr, temp, humidity, wind, rain, daysSinceRain, predMode, fetchRealWeather, districtsGeo]);
+
   const autoRefresh = useCallback(async () => {
     setIsAutoRefreshing(true);
     try {
       const coord = weatherCoordRef.current;
       if (coord) await fetchRealWeather(coord.lat, coord.lon);
-      // Wait briefly so weather state propagates before predict
       await new Promise(r => setTimeout(r, 300));
       await fetchPredictions();
       setLastRefreshTime(new Date());
@@ -369,76 +357,56 @@ export default function MapView() {
     }
   }, [fetchRealWeather, fetchPredictions]);
 
-  // Keep a ref of weatherCoord so the interval callback always reads the latest value
   const weatherCoordRef = useRef<{ lat: number; lon: number } | null>(null);
-  useEffect(() => {
-    weatherCoordRef.current = weatherCoord;
-  }, [weatherCoord]);
+  useEffect(() => { weatherCoordRef.current = weatherCoord; }, [weatherCoord]);
 
-  // Countdown + interval (only runs when document is visible)
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval> | null = null;
-
     const tick = () => {
       const isHidden = typeof document !== 'undefined' && document.hidden;
-      if (isHidden) return; // pause when tab hidden
+      if (isHidden) return;
       setNextRefreshIn(prev => {
-        if (prev <= 1) {
-          autoRefresh();
-          return REFRESH_INTERVAL;
-        }
+        if (prev <= 1) { autoRefresh(); return REFRESH_INTERVAL; }
         return prev - 1;
       });
     };
-
     intervalId = setInterval(tick, 1000);
-
     const onVisibilityChange = () => {
       if (!document.hidden) {
-        // If tab was hidden for >5 minutes, refresh immediately
         const lastTs = lastRefreshTime?.getTime() || 0;
         const elapsed = (Date.now() - lastTs) / 1000;
-        if (elapsed > 300) {
-          autoRefresh();
-        }
+        if (elapsed > 300) { autoRefresh(); }
       }
     };
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', onVisibilityChange);
-    }
-
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
       if (intervalId) clearInterval(intervalId);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', onVisibilityChange);
-      }
+      document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [autoRefresh, lastRefreshTime]);
 
-  // Format countdown as MM:SS
-  const countdownStr = useMemo(() => {
-    const m = Math.floor(nextRefreshIn / 60);
-    const s = nextRefreshIn % 60;
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-  }, [nextRefreshIn]);
-
-  // Apply forecast data when horizon changes
-  useEffect(() => {
-    if (forecastData.length > 0 && horizon <= forecastData.length) {
-      const day = forecastData[horizon - 1];
-      if (day) {
-        setTemp(Math.round(((day.temp_max + day.temp_min) / 2) * 10) / 10);
-        setRain(Math.round(day.rain * 10) / 10);
-        setWind(Math.round((day.wind / 3.6) * 10) / 10);
-      }
-    }
-  }, [horizon, forecastData]);
+  // Export CSV
+  const exportCSV = useCallback(() => {
+    if (!districtPredictions || districtPredictions.size === 0) return;
+    const rows = [['district_id', 'district_name', 'province', 'probability', 'risk_level', 'risk_color']];
+    districtPredictions.forEach((pred, did) => {
+      rows.push([String(did), pred.district_name || '?', pred.province || '?',
+        pred.probability?.toFixed(4) || '0', pred.risk_level || '?', pred.risk_color || '?']);
+    });
+    const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `wildfire_forecast_${forecastDateStr}_t${horizon}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [districtPredictions, forecastDateStr, horizon]);
 
   return (
     <div className="h-full flex">
       {/* MAP 70% */}
       <div className="flex-1 relative" style={{ flexBasis: "70%" }}>
-        {/* Disclaimer */}
         <div className="absolute top-0 left-0 right-0 z-[600] bg-slate-800/90 backdrop-blur text-white text-[10px] text-center py-1 px-2 flex items-center justify-center gap-2">
           <span className="inline-flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-400 animate-pulse' : 'bg-emerald-400 animate-pulse'}`} />
@@ -452,7 +420,7 @@ export default function MapView() {
         <MapContainer center={[16.5, 106.5]} zoom={6} className="h-full w-full" scrollWheelZoom={true} maxBounds={[[7.5, 100.5], [24.5, 110.5]]} maxBoundsViscosity={0.9} minZoom={5} maxZoom={12}>
           <TileLayer key={activeBasemap.id} url={activeBasemap.url} attribution={activeBasemap.attribution} subdomains={activeBasemap.subdomains || "abc"} maxZoom={activeBasemap.maxZoom} />
           {showDistricts && districtsGeo && (
-            <GeoJSON key={`districts-${districtAggMode}-${predMode}-${horizon}-${lastPredictTime ?? 0}`} data={districtsGeo} style={districtStyle} />
+            <GeoJSON key={`districts-${districtAggMode}-${predMode}-${horizon}-${lastPredictTime ?? 0}`} data={districtsGeo} style={districtStyle} onEachFeature={onEachDistrict} />
           )}
           {showCells && cellPredictions.map((c) => {
             const dm = cellToDistrict?.[c.id];
@@ -472,7 +440,7 @@ export default function MapView() {
                   )}
                   <div className="grid grid-cols-2 gap-1">
                     <div className="text-slate-500">P(cháy) t+{horizon}:</div>
-                    <div className="font-mono font-bold" style={{ color: c.riskColor }}>{(c.probability * 100).toFixed(1)}%</div>
+                    <div className="font-mono font-bold" style={{ color: c.riskColor }}>{(c.probability * 100).toFixed(2)}%</div>
                     <div className="text-slate-500">Mức:</div>
                     <div className="font-semibold" style={{ color: c.riskColor }}>{c.riskLevel}</div>
                   </div>
@@ -481,12 +449,6 @@ export default function MapView() {
             </CircleMarker>
             );
           })}
-          {showCities && VIETNAM_CITIES.map(city => (
-            <CircleMarker key={city.name} center={[city.lat, city.lon]} radius={4}
-              pathOptions={{ color: "#0f172a", fillColor: "#0f172a", fillOpacity: 1, weight: 1.5 }}>
-              <Popup><div className="text-xs"><div className="font-bold text-slate-900">{city.name}</div><div className="text-slate-600">{city.lat.toFixed(2)}°N, {city.lon.toFixed(2)}°E</div></div></Popup>
-            </CircleMarker>
-          ))}
         </MapContainer>
 
         {/* Legend */}
@@ -497,36 +459,74 @@ export default function MapView() {
           </div>
         </div>
 
-        {/* Model status */}
+        {/* Model status + weather display (B) */}
         <div className="absolute top-8 left-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2 text-[10px]">
           <div className="flex items-center gap-1.5">
             {isPredicting ? <Loader2 className="h-3 w-3 animate-spin text-slate-500" /> : <Cpu className="h-3 w-3 text-slate-600" />}
             <span className="font-semibold text-slate-700">{isPredicting ? "Đang chạy..." : (showDistricts && districtPredictions.size > 0 ? "Model v9.4 (Huyện)" : "Model v9.0 (Ô)")}</span>
           </div>
           <div className="mt-1 text-slate-500">
-            <div>AUROC South OOD (forest fire): <span className="font-mono text-slate-700">{showDistricts && districtPredictions.size > 0 ? "0,979 (v9.4 huyện)" : "0,921 (v9.0 ô)"}</span></div>
+            <div>AUROC OOD: <span className="font-mono text-slate-700">{showDistricts && districtPredictions.size > 0 ? "0,979" : "0,921"}</span></div>
             <div>Dự báo: <span className="font-mono text-slate-700">t+{horizon} ({forecastDateStr})</span></div>
             {lastPredictTime !== null && <div>Latency: <span className="font-mono text-slate-700">{lastPredictTime}ms</span></div>}
-            {lastRefreshTime && (
-              <div className="mt-1 pt-1 border-t border-slate-200">
-                <div>Cập nhật gần nhất: <span className="font-mono text-slate-700">{lastRefreshTime.toLocaleTimeString("vi-VN")}</span></div>
-                <div className="flex items-center gap-1 mt-0.5">
-                  <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
-                  <span className="font-mono text-slate-600">{isAutoRefreshing ? 'ĐANG REFRESH…' : `Sau ${countdownStr}`}</span>
-                </div>
-              </div>
-            )}
           </div>
+          {/* Weather display (B) */}
+          <div className="mt-2 pt-2 border-t border-slate-200 space-y-0.5">
+            <div className="font-semibold text-slate-700 mb-0.5 text-[9px] uppercase">Thời tiết hiện tại</div>
+            <div className="flex justify-between gap-3"><span className="text-slate-500">Nhiệt độ:</span><span className="font-mono font-bold text-slate-900">{temp}°C</span></div>
+            <div className="flex justify-between gap-3"><span className="text-slate-500">Độ ẩm:</span><span className="font-mono font-bold text-slate-900">{humidity}%</span></div>
+            <div className="flex justify-between gap-3"><span className="text-slate-500">Gió:</span><span className="font-mono font-bold text-slate-900">{wind} m/s</span></div>
+            <div className="flex justify-between gap-3"><span className="text-slate-500">Mưa:</span><span className="font-mono font-bold text-slate-900">{rain} mm</span></div>
+            <div className="flex justify-between gap-3"><span className="text-slate-500">Nguồn:</span><span className="font-mono text-[9px] text-slate-600">{weatherSource}</span></div>
+          </div>
+          {lastRefreshTime && (
+            <div className="mt-2 pt-1 border-t border-slate-200">
+              <div>Cập nhật: <span className="font-mono text-slate-700">{lastRefreshTime.toLocaleTimeString("vi-VN")}</span></div>
+              <div className="flex items-center gap-1 mt-0.5">
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${isAutoRefreshing ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}`} />
+                <span className="font-mono text-slate-600">{isAutoRefreshing ? 'ĐANG REFRESH…' : `Sau ${countdownStr}`}</span>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Stats */}
-        <div className="absolute top-8 right-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2.5 text-xs">
+        {/* Stats + Top 10 (F) */}
+        <div className="absolute top-8 right-3 z-[500] bg-white/95 backdrop-blur rounded-md shadow-md ring-1 ring-slate-200 p-2.5 text-xs max-w-[220px]">
           <div className="font-semibold text-slate-700 mb-1.5 text-[11px]">Thống kê t+{horizon}</div>
           <div className="space-y-1">
             <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">{districtPredictions.size > 0 ? "Tổng huyện" : "Tổng ô"}</span><span className="font-mono font-bold text-xs text-slate-900">{stats.total}</span></div>
             <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">Nguy cơ cao</span><span className="font-mono font-bold text-xs text-slate-700">{stats.high}</span></div>
-            <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">TB</span><span className="font-mono font-bold text-xs text-slate-700">{(stats.avg * 100).toFixed(1)}%</span></div>
+            <div className="flex justify-between gap-2"><span className="text-slate-500 text-[10px]">TB</span><span className="font-mono font-bold text-xs text-slate-700">{(stats.avg * 100).toFixed(2)}%</span></div>
           </div>
+          {topDistricts.length > 0 && (
+            <div className="mt-2 pt-2 border-t border-slate-200">
+              <div className="font-semibold text-slate-700 mb-1 text-[10px] flex items-center gap-1">
+                <TrendingUp className="h-3 w-3" /> Top 10 nguy cơ cao
+              </div>
+              <div className="space-y-0.5 max-h-[200px] overflow-y-auto">
+                {topDistricts.map((d, i) => (
+                  <div key={i} className="flex justify-between items-center text-[9px] py-0.5 cursor-pointer hover:bg-slate-50 rounded px-1"
+                    onClick={() => {
+                      setSelectedDistrict(d.district_id);
+                      if (districtsGeo?.features?.[d.district_id]?.properties) {
+                        const p = districtsGeo.features[d.district_id].properties;
+                        fetchRealWeather(p.centroid_lat || 16.5, p.centroid_lon || 106.5);
+                      }
+                    }}>
+                    <span className="text-slate-600 truncate flex-1">{i+1}. {d.district_name || '?'}</span>
+                    <span className="font-mono font-bold ml-1" style={{ color: d.risk_color }}>{(d.probability * 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Export CSV (E) */}
+          {districtPredictions.size > 0 && (
+            <button onClick={exportCSV}
+              className="mt-2 w-full h-6 px-2 text-[9px] font-semibold bg-slate-700 hover:bg-slate-800 text-white rounded transition-colors flex items-center justify-center gap-1">
+              <Download className="h-2.5 w-2.5" /> Tải CSV ({districtPredictions.size} huyện)
+            </button>
+          )}
         </div>
       </div>
 
@@ -549,7 +549,7 @@ export default function MapView() {
             </div>
           </div>
 
-          {/* Auto-refresh control */}
+          {/* Auto-refresh */}
           <div>
             <Label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide mb-2 block flex items-center justify-between">
               <span>Tự động cập nhật</span>
@@ -576,39 +576,6 @@ export default function MapView() {
               >
                 {isAutoRefreshing ? "Đang cập nhật…" : "↻ Cập nhật ngay"}
               </button>
-              <div className="text-[9px] text-slate-400 italic mt-1 pt-1 border-t border-slate-100">
-                Tự động lấy weather + predict mỗi 10 phút khi tab đang mở. Pause khi tab ẩn.
-              </div>
-            </div>
-          </div>
-
-          {/* Real-time weather (auto) */}
-          <div>
-            <Label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide mb-2 block flex items-center justify-between">
-              <span>Thời tiết thực</span>
-              <span className={`inline-flex items-center gap-1 text-[9px] font-medium px-1.5 py-0.5 rounded ${isFetchingWeather ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
-                <span className={`inline-block w-1.5 h-1.5 rounded-full ${isFetchingWeather ? "bg-amber-500 animate-pulse" : "bg-emerald-500 animate-pulse"}`} />
-                {isFetchingWeather ? "ĐANG LẤY" : "LIVE"}
-              </span>
-            </Label>
-            <div className="bg-white p-2.5 rounded-md ring-1 ring-slate-200 text-[10px] space-y-1">
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Nguồn:</span>
-                <span className="font-mono font-semibold text-slate-700">{weatherSource}</span>
-              </div>
-              {weatherCoord && (
-                <div className="flex justify-between items-center">
-                  <span className="text-slate-500">Vị trí:</span>
-                  <span className="font-mono text-slate-700">{weatherCoord.lat.toFixed(2)}°N, {weatherCoord.lon.toFixed(2)}°E</span>
-                </div>
-              )}
-              <div className="flex justify-between items-center">
-                <span className="text-slate-500">Dự báo cho:</span>
-                <span className="font-mono font-semibold text-slate-700">{forecastDateStr}</span>
-              </div>
-              <div className="text-[9px] text-slate-400 italic mt-1 pt-1 border-t border-slate-100">
-                Tự động lấy khi click ô lưới. Cập nhật số liệu khi click ô khác.
-              </div>
             </div>
           </div>
 
@@ -631,30 +598,26 @@ export default function MapView() {
             </Label>
             <div className="bg-white p-3 rounded-md ring-1 ring-slate-200 space-y-1.5">
               <Toggle label={`Ô lưới (${VIETNAM_GRID.length} ô)`} checked={showCells} onChange={setShowCells} />
-              <Toggle label="Thành phố" checked={showCities} onChange={setShowCities} />
-              <Toggle label={`Huyện (${showDistricts && districtsGeo ? districtsGeo.features.length : 710} đv) — overlay`} checked={showDistricts} onChange={setShowDistricts} />
+              <Toggle label={`Huyện (${showDistricts && districtsGeo ? districtsGeo.features.length : 710} đv)`} checked={showDistricts} onChange={setShowDistricts} />
               {showDistricts && (
                 <div className="mt-1 pt-1 border-t border-slate-100">
-                  <div className="text-[10px] text-slate-500 mb-1">Aggregation mode (cell → huyện):</div>
+                  <div className="text-[10px] text-slate-500 mb-1">Aggregation mode:</div>
                   <div className="flex rounded ring-1 ring-slate-200 overflow-hidden">
                     <button onClick={() => setDistrictAggMode("max")}
                       className={`flex-1 px-2 py-1 text-[10px] font-semibold ${districtAggMode === "max" ? "bg-emerald-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}>
-                      Max (mức cao nhất trong huyện)
+                      Max
                     </button>
                     <button onClick={() => setDistrictAggMode("avg")}
                       className={`flex-1 px-2 py-1 text-[10px] font-semibold ${districtAggMode === "avg" ? "bg-emerald-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}>
-                      Avg (trung bình)
+                      Avg
                     </button>
-                  </div>
-                  <div className="text-[9px] text-slate-400 italic mt-1">
-                    Lớp này là overlay hành chính — dự báo v9.0 vẫn chạy ở cấp ô lưới.
                   </div>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Prediction mode toggle (NEW) */}
+          {/* Prediction mode */}
           <div>
             <Label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide mb-2 block">
               <Cpu className="inline h-3 w-3 mr-1" />Chế độ dự báo
@@ -663,30 +626,17 @@ export default function MapView() {
               <div className="flex rounded-md ring-1 ring-slate-200 overflow-hidden">
                 <button
                   onClick={() => setPredMode("forest")}
-                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                    predMode === "forest"
-                      ? "bg-emerald-600 text-white"
-                      : "bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
+                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${predMode === "forest" ? "bg-emerald-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
                 >
                   🌲 Cháy RỪNG
                 </button>
                 <button
                   onClick={() => setPredMode("any")}
-                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${
-                    predMode === "any"
-                      ? "bg-orange-600 text-white"
-                      : "bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
+                  className={`flex-1 px-3 py-1.5 text-[11px] font-semibold transition-colors ${predMode === "any" ? "bg-orange-600 text-white" : "bg-white text-slate-700 hover:bg-slate-50"}`}
                 >
                   🔥 Cháy BẤT KỲ
                 </button>
               </div>
-              <p className="mt-1.5 text-[9px] text-slate-500 leading-tight">
-                {predMode === "forest"
-                  ? "Lọc cháy nông nghiệp, chỉ giữ high-confidence (FRP cao = cháy rừng thật)"
-                  : "Tất cả MODIS detection — bao gồm cháy nông nghiệp"}
-              </p>
             </div>
           </div>
 
@@ -703,47 +653,9 @@ export default function MapView() {
             </Select>
           </div>
 
-          {/* Prediction History */}
-          <div>
-            <Label className="text-[11px] font-semibold text-slate-700 uppercase tracking-wide mb-2 block">
-              <History className="inline h-3 w-3 mr-1" />Lịch sử dự báo
-            </Label>
-            <div className="bg-white p-2 rounded-md ring-1 ring-slate-200 max-h-48 overflow-y-auto space-y-1.5">
-              {history.length === 0 && <div className="text-[10px] text-slate-400 text-center py-3">Chưa có dự báo nào</div>}
-              {history.map((h, i) => (
-                <div key={i} className="p-2 rounded bg-slate-50 text-[10px] space-y-0.5">
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">{h.timestamp}</span>
-                    <span className="font-mono font-bold text-slate-700">t+{h.horizon}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-500">P(tb): {(h.avgProbability * 100).toFixed(1)}%</span>
-                    <span className="text-slate-500">Cao: {h.highRiskCount}</span>
-                  </div>
-                  <div className="text-[9px] text-slate-400">{h.forecastDate} · {h.source}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Selected cell detail */}
-          {selectedCell && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <Label className="text-[11px] font-semibold text-slate-700 uppercase"><MapPin className="inline h-3 w-3 mr-1" />Ô đã chọn</Label>
-                <button onClick={() => setSelectedCell(null)} className="text-slate-400 hover:text-slate-700"><X className="h-3.5 w-3.5" /></button>
-              </div>
-              <div className="p-3 rounded-md ring-2 ring-slate-400 bg-white text-xs space-y-1.5">
-                <div className="flex justify-between"><span className="text-slate-500">Tọa độ:</span><span className="font-mono font-semibold">{selectedCell.lat}°N, {selectedCell.lon}°E</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Vùng:</span><span className="font-semibold">{selectedCell.region === "north" ? "Bắc" : selectedCell.region === "central" ? "Trung" : "Nam"}</span></div>
-                <div className="flex justify-between items-center"><span className="text-slate-500">P(cháy) t+{horizon}:</span><span className="font-mono font-bold text-sm" style={{ color: (selectedCell as any).riskColor || "#94a3b8" }}>{((selectedCell as any).probability * 100).toFixed(1)}%</span></div>
-              </div>
-            </div>
-          )}
-
           <div className="p-2 rounded-md bg-slate-100 ring-1 ring-slate-200 text-[10px] text-slate-600 leading-relaxed">
             <Cpu className="inline h-3 w-3 text-slate-500 mr-1" />
-            Model {(showDistricts && districtPredictions.size > 0) ? "v9.4 (Huyện): XGBoost + Optuna + spatial lag, 75 features, full panel + real MODIS NDVI, AUROC=0,979 OOD South" : "v9.0 (Ô): XGBoost + Isotonic, 61 features, AUROC=0,921 OOD South"}. Multi-task forest fire (high-conf MODIS). Cold-start: train Bắc+Trung, test Nam.
+            Model v9.4: XGBoost + Optuna + spatial lag, 75 features, AUROC=0,979 OOD South. Cold-start: train Bắc+Trung, test Nam.
           </div>
         </div>
       </div>
