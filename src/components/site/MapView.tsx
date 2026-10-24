@@ -36,11 +36,12 @@ const HORIZONS = [
 ] as const;
 
 const RISK_LEGEND = [
-  { color: "#991b1b", label: "Rất cao (≥0,7)" },
-  { color: "#dc2626", label: "Cao (0,5-0,7)" },
-  { color: "#f59e0b", label: "TB (0,3-0,5)" },
-  { color: "#84cc16", label: "Thấp-TB (0,15-0,3)" },
-  { color: "#22c55e", label: "Thấp (<0,15)" },
+  { color: "#4c1d95", label: "Nguy hiểm (≥0,20)" },
+  { color: "#7f1d1d", label: "Rất cao (0,10-0,20)" },
+  { color: "#dc2626", label: "Cao (0,05-0,10)" },
+  { color: "#f59e0b", label: "TB (0,02-0,05)" },
+  { color: "#84cc16", label: "Thấp-TB (0,005-0,02)" },
+  { color: "#22c55e", label: "Thấp (<0,005)" },
 ];
 
 interface PredictionHistory {
@@ -285,10 +286,11 @@ export default function MapView() {
       districtPredictions.forEach((pred, did) => {
         const p = Math.min(0.99, Math.max(0.001, pred.probability || 0));
         let color = "#22c55e";
-        if (p >= 0.7)      color = "#991b1b";
-        else if (p >= 0.5) color = "#dc2626";
-        else if (p >= 0.3) color = "#f59e0b";
-        else if (p >= 0.15) color = "#84cc16";
+        if (p >= 0.20)      color = "#4c1d95";
+        else if (p >= 0.10) color = "#7f1d1d";
+        else if (p >= 0.05) color = "#dc2626";
+        else if (p >= 0.02) color = "#f59e0b";
+        else if (p >= 0.005) color = "#84cc16";
         const d = districtsGeo.features[did];
         const name = d?.properties?.name ?? pred.district_name ?? "?";
         const prov = d?.properties?.province ?? pred.province ?? "?";

@@ -272,10 +272,11 @@ export function predictBatchV94JS(inputs: any[], neighborFire: Record<number, nu
     const p = Math.max(0.001, Math.min(0.999, p_cal));
 
     let risk_level = "Thấp", risk_color = "#22c55e";
-    if (p >= 0.30) { risk_level = "Nguy hiểm"; risk_color = "#4c1d95"; }
-    else if (p >= 0.20) { risk_level = "Rất cao"; risk_color = "#7f1d1d"; }
-    else if (p >= 0.10) { risk_level = "Cao"; risk_color = "#dc2626"; }
-    else if (p >= 0.05) { risk_level = "Trung bình"; risk_color = "#f59e0b"; }
+    if (p >= 0.20) { risk_level = "Nguy hiểm"; risk_color = "#4c1d95"; }
+    else if (p >= 0.10) { risk_level = "Rất cao"; risk_color = "#7f1d1d"; }
+    else if (p >= 0.05) { risk_level = "Cao"; risk_color = "#dc2626"; }
+    else if (p >= 0.02) { risk_level = "Trung bình"; risk_color = "#f59e0b"; }
+    else if (p >= 0.005) { risk_level = "Thấp-TB"; risk_color = "#84cc16"; }
 
     const static_ = DISTRICT_MAP[districtId] || {};
     results.push({
