@@ -20,6 +20,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase.pdfmetrics import registerFontFamily
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak,
+    Image,
 )
 
 pdfmetrics.registerFont(TTFont('Lib', '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf'))
@@ -84,14 +85,19 @@ s.append(Paragraph('Trường: THCS Lê Quý Đôn', st_body_left))
 s.append(Paragraph('Hiệu trưởng: Nguyễn Anh Tuấn', st_body_left))
 s.append(Spacer(1, 25*mm))
 s.append(Paragraph('Hà Nội, tháng 10 năm 2026', st_subtitle))
+s.append(Spacer(1, 10*mm))
+# Product link on cover
+s.append(Paragraph('<b>Link sản phẩm (web app):</b>', st_subtitle))
+s.append(Paragraph('<font color="#1e40af" size="12"><b>https://wildfireforecastvietnam.netlify.app</b></font>', st_subtitle))
 s.append(PageBreak())
 
 # MỤC LỤC
 s.append(Paragraph('MỤC LỤC', st_h1))
 for i, t in enumerate([
-    '1. Tóm tắt', '2. Đặt vấn đề', '3. Tổng quan tài liệu', '4. Mục tiêu nghiên cứu',
-    '5. Phương pháp nghiên cứu', '6. Dữ liệu', '7. Kết quả', '8. Thảo luận',
-    '9. Kết luận', '10. Hạn chế và hướng phát triển', '11. Tài liệu tham khảo',
+    'Tóm tắt', 'Đặt vấn đề', 'Tổng quan tài liệu', 'Mục tiêu nghiên cứu',
+    'Phương pháp nghiên cứu', 'Dữ liệu', 'Kết quả', 'Thảo luận',
+    'Kết luận', 'Hạn chế và hướng phát triển',
+    'Preview sản phẩm (web app)', 'Tài liệu tham khảo',
 ], 1):
     s.append(Paragraph(f'{i}. {t}', st_body_left))
 s.append(PageBreak())
@@ -108,7 +114,8 @@ s.append(Paragraph(
     'bằng Optuna 30 lần với mục tiêu là điểm AUROC trên tập kiểm định (không rò rỉ dữ liệu), '
     'hiệu chỉnh đẳng điều fit trên tập kiểm định. Kết quả: AUROC = 0,977, Brier = 0,038, '
     'AUPR = 0,871. Hệ thống được triển khai trên web Next.js + Netlify với bộ suy diễn '
-    'JavaScript 297 dòng, tích hợp điểm cháy FIRMS thời gian thực.', st_body))
+    'JavaScript 297 dòng, tích hợp điểm cháy FIRMS thời gian thực. Web app truy cập tại: '
+    '<b>wildfireforecastvietnam.netlify.app</b>.', st_body))
 s.append(PageBreak())
 
 # 2. ĐẶT VẤN ĐỀ
@@ -322,8 +329,8 @@ s.append(Paragraph(
     'Đề tài đạt các mục tiêu: (1) Pipeline dữ liệu huyện-cấp 710 huyện × 6 năm. (2) Huấn luyện '
     'XGBoost 75 đặc trưng với phương pháp không rò rỉ dữ liệu. (3) AUROC 0,977 và Brier 0,038 '
     'trên cold-start OOD test. (4) Deploy web app với JS inference engine + FIRMS real-time '
-    'integration. Học máy có thể là công cụ hỗ trợ hiệu quả cho dự báo cháy rừng tại Việt Nam.',
-    st_body))
+    'integration — truy cập tại <b>wildfireforecastvietnam.netlify.app</b>. Học máy có thể '
+    'là công cụ hỗ trợ hiệu quả cho dự báo cháy rừng tại Việt Nam.', st_body))
 s.append(PageBreak())
 
 # 10. HẠN CHẾ
@@ -347,8 +354,40 @@ for f in [
     s.append(Paragraph(f, st_body))
 s.append(PageBreak())
 
-# 11. TÀI LIỆU THAM KHẢO
-s.append(Paragraph('11. TÀI LIỆU THAM KHẢO', st_h1))
+# 11. PREVIEW SẢN PHẨM
+s.append(Paragraph('11. PREVIEW SẢN PHẨM (WEB APP)', st_h1))
+s.append(Paragraph(
+    'Web ứng dụng đã được triển khai tại địa chỉ: '
+    '<font color="#1e40af"><b>https://wildfireforecastvietnam.netlify.app</b></font>. '
+    'Người dùng truy cập vào website sẽ thấy trang chủ với tiêu đề dự án, tên học sinh, GVHD, '
+    'thống kê chính (964K huyện-ngày, 710 huyện, 75 đặc trưng, AUROC 0,977, Brier 0,038), và '
+    'nút "Thử ngay" để vào bản đồ dự báo. Hình dưới đây là ảnh chụp màn hình trang chủ.',
+    st_body))
+s.append(Spacer(1, 5*mm))
+
+# Embed screenshot
+preview_path = '/home/z/my-project/public/wildfire_preview.png'
+if os.path.exists(preview_path):
+    img = Image(preview_path, width=15*cm, height=9.375*cm)  # 16:10 aspect ratio
+    img.hAlign = 'CENTER'
+    s.append(img)
+    s.append(Spacer(1, 3*mm))
+    s.append(Paragraph(
+        '<i>Hình 1: Ảnh chụp màn hình trang chủ web app tại '
+        'wildfireforecastvietnam.netlify.app.</i>', st_caption))
+s.append(Spacer(1, 5*mm))
+
+s.append(Paragraph(
+    'Tính năng chính của web app: (1) hiển thị bản đồ 710 huyện với màu sắc theo mức nguy cơ '
+    '(6 cấp: ≥0,20 Nguy hiểm → <0,005 Thấp); (2) popup chi tiết khi click huyện; (3) bảng top '
+    '10 huyện nguy cơ cao nhất; (4) xuất CSV danh sách dự báo; (5) auto-refresh 10 phút với '
+    'thời tiết thật từ Open-Meteo; (6) tích hợp FIRMS real-time cho neighbor_fire. Web app '
+    'hoạt động trên Netlify serverless với JS inference engine 297 dòng TypeScript — không '
+    'cần Python runtime.', st_body))
+s.append(PageBreak())
+
+# 12. TÀI LIỆU THAM KHẢO
+s.append(Paragraph('12. TÀI LIỆU THAM KHẢO', st_h1))
 refs = [
     'Chen, T., Guestrin, C. (2016). XGBoost: A Scalable Tree Boosting System. KDD 2016, 785-794.',
     'Niculescu-Mizil, A., Caruana, R. (2005). Predicting Good Probabilities With Supervised Learning. ICML 2005.',
