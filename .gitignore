@@ -89,3 +89,6 @@ Wildfire_Physics_Constrained_ML_Report.pdf
 # GADM raw files (large, not needed in git)
 public/data/geo/gadm41_VNM_2.json
 public/data/geo/gadm41_VNM_2.json.zip
+
+# KHKT forms folder (separate private repo KKookie55/Private)
+/KHKT_HoSo/

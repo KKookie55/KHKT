@@ -17,7 +17,7 @@ export const PROJECT = {
   seeds: 5,
   spatialSplits: 5,
   temporalSplits: 3,
-  school: "Trường THCS&THPT LÊ QUÝ ĐÔN",
+  school: "Trường THCS Lê Quý Đôn",
   teacher: "Lê Xuân Tân",
   class: "9E4",
   modelVersion: "v9.4 forest fire (Optuna + spatial lag + real MODIS NDVI)",
@@ -28,7 +28,7 @@ export const KEY_FINDINGS = [
   {
     label: "AUROC cold-start OOD — cháy RỪNG (v9.4)",
     value: "97,9%",
-    sub: "Brier 0,035 · 75 features · Optuna tuned",
+    sub: "Brier 0,038 · 75 features · Optuna tuned",
     tone: "good" as const,
     note: "Full panel 490K rows + real MODIS NDVI + spatial lag + Optuna hyperparameter tuning",
   },

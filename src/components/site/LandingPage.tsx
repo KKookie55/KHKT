@@ -57,8 +57,8 @@ export default function LandingPage({ onTryNow }: LandingPageProps) {
               { label: "Huyện-day", value: "964K" },
               { label: "Huyện", value: "710" },
               { label: "Features", value: "75" },
-              { label: "AUROC OOD", value: "0,979" },
-              { label: "Brier", value: "0,035" },
+              { label: "AUROC OOD", value: "0,977" },
+              { label: "Brier", value: "0,038" },
             ].map((s, i) => (
               <div key={i} className="text-center">
                 <div className="text-lg font-bold text-slate-900">{s.value}</div>
@@ -143,7 +143,7 @@ export default function LandingPage({ onTryNow }: LandingPageProps) {
                 <div className="text-xs text-slate-600 space-y-1">
                   <div>v9.0 (ô lưới): AUROC 0,921 — cell-level, 61 features</div>
                   <div>v9.3 (huyện): AUROC 0,929 — district-level, 77 features, real MODIS NDVI</div>
-                  <div className="font-semibold text-slate-800">v9.4 (huyện): AUROC 0,979 — Optuna + spatial lag, 75 features, full panel</div>
+                  <div className="font-semibold text-slate-800">v9.4 (huyện): AUROC 0,977 — Optuna + spatial lag, 75 features, leak-free retrain</div>
                 </div>
               </div>
             </div>
